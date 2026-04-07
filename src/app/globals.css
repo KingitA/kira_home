@@ -15,46 +15,37 @@ body {
   color: #1a1a1a;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #d4c5b0;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #b8a690;
-}
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d4c5b0; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #b8a690; }
 
-/* Input styles */
 input[type="number"]::-webkit-inner-spin-button,
-input[type="number"]::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-input[type="number"] {
-  -moz-appearance: textfield;
-}
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
 
-/* Animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-
 @keyframes slideIn {
   from { opacity: 0; transform: translateX(16px); }
   to { opacity: 1; transform: translateX(0); }
 }
+.animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+.animate-slide-in { animation: slideIn 0.25s ease-out forwards; }
 
-.animate-fade-in {
-  animation: fadeIn 0.3s ease-out forwards;
+/* Botanical background pattern */
+.bg-botanical {
+  position: relative;
 }
-
-.animate-slide-in {
-  animation: slideIn 0.25s ease-out forwards;
+.bg-botanical::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800'%3E%3Cg fill='%23425740' opacity='0.04'%3E%3Cpath d='M-50,800 Q50,600 30,500 Q80,550 100,450 Q60,520 70,400 Q120,480 130,380 Q90,440 100,320 Q140,400 160,300 Q110,370 120,260 Q170,340 180,240 Q130,300 150,200 Q190,280 200,180 Q150,240 170,140 Q210,220 220,120 Q40,300 -50,800Z'/%3E%3Cpath d='M150,800 Q200,650 250,600 Q220,620 280,550 Q240,580 300,500 Q260,530 320,460 Q280,490 340,420 Q200,500 150,800Z'/%3E%3Cpath d='M1250,800 Q1150,600 1170,500 Q1120,550 1100,450 Q1140,520 1130,400 Q1080,480 1070,380 Q1110,440 1100,320 Q1060,400 1040,300 Q1090,370 1080,260 Q1030,340 1020,240 Q1070,300 1050,200 Q1010,280 1000,180 Q1160,300 1250,800Z'/%3E%3Cpath d='M1050,800 Q1000,650 950,600 Q980,620 920,550 Q960,580 900,500 Q940,530 880,460 Q920,490 860,420 Q1000,500 1050,800Z'/%3E%3Cpath d='M500,800 Q520,720 540,700 Q510,730 550,680 Q520,710 560,660 Q530,690 570,640 Q500,700 500,800Z'/%3E%3Cpath d='M700,800 Q680,720 660,700 Q690,730 650,680 Q680,710 640,660 Q670,690 630,640 Q700,700 700,800Z'/%3E%3Cpath d='M600,800 Q580,700 590,650 Q620,700 610,600 Q640,670 630,560 Q660,640 650,520 Q600,620 600,800Z'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: cover;
+  background-position: bottom;
+  background-repeat: no-repeat;
 }

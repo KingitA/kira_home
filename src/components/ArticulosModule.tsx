@@ -43,7 +43,7 @@ export default function ArticulosModule() {
     const { data } = await query
     if (data) {
       setArticulos(data)
-      const provs = [...new Set(data.map(a => a.proveedor))].filter(Boolean).sort()
+      const provs = Array.from(new Set(data.map(a => a.proveedor))).filter(Boolean).sort() as string[]
       setProveedores(provs)
     }
     setLoading(false)

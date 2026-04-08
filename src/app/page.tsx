@@ -6,6 +6,7 @@ import { formatCurrency } from '@/lib/utils'
 import ArticulosModule from '@/components/ArticulosModule'
 import VentasModule from '@/components/VentasModule'
 import HistorialVentas from '@/components/HistorialVentas'
+import ProveedoresModule from '@/components/ProveedoresModule'
 import {
   Package,
   ShoppingCart,
@@ -15,9 +16,10 @@ import {
   Home,
   Menu,
   X,
+  Building2,
 } from 'lucide-react'
 
-type Module = 'articulos' | 'ventas' | 'historial'
+type Module = 'articulos' | 'ventas' | 'historial' | 'proveedores'
 
 export default function HomePage() {
   const [activeModule, setActiveModule] = useState<Module>('ventas')
@@ -46,6 +48,7 @@ export default function HomePage() {
   const modules = [
     { id: 'ventas' as Module, label: 'Punto de Venta', icon: ShoppingCart, desc: 'Registrar ventas' },
     { id: 'articulos' as Module, label: 'Artículos', icon: Package, desc: 'Gestionar stock' },
+    { id: 'proveedores' as Module, label: 'Proveedores', icon: Building2, desc: 'CC y compras' },
     { id: 'historial' as Module, label: 'Historial', icon: Receipt, desc: 'Ventas realizadas' },
   ]
 
@@ -167,6 +170,7 @@ export default function HomePage() {
           {activeModule === 'articulos' && <ArticulosModule />}
           {activeModule === 'ventas' && <VentasModule onVentaCompleta={fetchBilletera} />}
           {activeModule === 'historial' && <HistorialVentas />}
+          {activeModule === 'proveedores' && <ProveedoresModule />}
         </div>
       </main>
     </div>

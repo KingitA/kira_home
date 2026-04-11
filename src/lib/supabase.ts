@@ -5,6 +5,12 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+export type MetodoPago = 'efectivo' | 'transferencia' | 'tarjeta_debito' | 'tarjeta_credito'
+
+export const METODO_PAGO_LABELS: Record<MetodoPago, string> = {
+  efectivo: 'Efectivo', transferencia: 'Transferencia', tarjeta_debito: 'Tarjeta Débito', tarjeta_credito: 'Tarjeta Crédito'
+}
+
 export interface Articulo {
   id: number; proveedor: string; codigo: string; descripcion: string; cantidad: number
   costo_unitario: number; precio_comparativo: number | null; precio_venta: number
@@ -12,8 +18,8 @@ export interface Articulo {
 }
 
 export interface Venta {
-  id: number; fecha: string; total: number; metodo_pago: 'efectivo' | 'transferencia'
-  estado: 'completada' | 'anulada'; nota: string | null; created_at: string
+  id: number; fecha: string; total: number; metodo_pago: MetodoPago
+  estado: 'completada' | 'anulada'; nota: string | null; cuotas: number; created_at: string
 }
 
 export interface VentaItem {
@@ -22,12 +28,11 @@ export interface VentaItem {
 }
 
 export interface Billetera {
-  id: number; tipo: 'efectivo' | 'transferencia'; saldo: number; updated_at: string
+  id: number; tipo: MetodoPago; saldo: number; updated_at: string
 }
 
 export interface CarritoItem { articulo: Articulo; cantidad: number }
 
-// Proveedores
 export interface Proveedor {
   id: number; nombre: string; tipo: 'mercaderia' | 'servicio'
   cuit: string | null; direccion: string | null; localidad: string | null; provincia: string | null
@@ -37,11 +42,7 @@ export interface Proveedor {
   activo: boolean; created_at: string; updated_at: string
 }
 
-export type TipoComprobante =
-  'factura_a' | 'factura_b' | 'factura_c' |
-  'debito_a' | 'debito_b' | 'debito_c' |
-  'credito_a' | 'credito_b' | 'credito_c' |
-  'presupuesto' | 'reversa'
+export type TipoComprobante = 'factura_a'|'factura_b'|'factura_c'|'debito_a'|'debito_b'|'debito_c'|'credito_a'|'credito_b'|'credito_c'|'presupuesto'|'reversa'
 
 export interface Comprobante {
   id: number; proveedor_id: number; tipo_comprobante: TipoComprobante
@@ -54,7 +55,7 @@ export interface Comprobante {
 
 export interface OrdenPago {
   id: number; proveedor_id: number; fecha: string
-  metodo_pago: 'efectivo' | 'transferencia'; monto: number
+  metodo_pago: MetodoPago; monto: number
   comprobante_id: number | null; es_a_cuenta: boolean
   nota: string | null; created_at: string
 }
@@ -68,35 +69,24 @@ export interface OrdenCompra {
 
 export interface OrdenCompraItem {
   id: number; orden_compra_id: number; articulo_id: number
-  cantidad: number; precio_unitario: number; subtotal: number
-  articulo?: Articulo
+  cantidad: number; precio_unitario: number; subtotal: number; articulo?: Articulo
 }
 
 export interface Gasto {
   id: number; descripcion: string; monto: number
-  metodo_pago: 'efectivo' | 'transferencia'; fecha: string
+  metodo_pago: MetodoPago; fecha: string
   proveedor_id: number | null; tiene_comprobante: boolean
   tipo_comprobante: string | null; numero_comprobante: string | null
   nota: string | null; created_at: string
 }
 
 export const COMPROBANTE_LABELS: Record<TipoComprobante, string> = {
-  factura_a: 'Factura A', factura_b: 'Factura B', factura_c: 'Factura C',
-  debito_a: 'Nota de Débito A', debito_b: 'Nota de Débito B', debito_c: 'Nota de Débito C',
-  credito_a: 'Nota de Crédito A', credito_b: 'Nota de Crédito B', credito_c: 'Nota de Crédito C',
-  presupuesto: 'Presupuesto', reversa: 'Reversa'
+  factura_a:'Factura A',factura_b:'Factura B',factura_c:'Factura C',
+  debito_a:'N/D A',debito_b:'N/D B',debito_c:'N/D C',
+  credito_a:'N/C A',credito_b:'N/C B',credito_c:'N/C C',
+  presupuesto:'Presupuesto',reversa:'Reversa'
 }
 
-// Comprobantes que suman a la deuda (facturas y débitos)
-export const COMPROBANTES_DEUDA: TipoComprobante[] = [
-  'factura_a','factura_b','factura_c','debito_a','debito_b','debito_c','presupuesto'
-]
-// Comprobantes que restan de la deuda (créditos y reversas)
-export const COMPROBANTES_CREDITO: TipoComprobante[] = [
-  'credito_a','credito_b','credito_c','reversa'
-]
-// Comprobantes con IVA
-export const COMPROBANTES_CON_IVA: TipoComprobante[] = [
-  'factura_a','factura_b','factura_c','debito_a','debito_b','debito_c',
-  'credito_a','credito_b','credito_c'
-]
+export const COMPROBANTES_DEUDA: TipoComprobante[] = ['factura_a','factura_b','factura_c','debito_a','debito_b','debito_c','presupuesto']
+export const COMPROBANTES_CREDITO: TipoComprobante[] = ['credito_a','credito_b','credito_c','reversa']
+export const COMPROBANTES_CON_IVA: TipoComprobante[] = ['factura_a','factura_b','factura_c','debito_a','debito_b','debito_c','credito_a','credito_b','credito_c']

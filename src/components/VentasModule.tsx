@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { supabase, Articulo, CarritoItem, MetodoPago, METODO_PAGO_LABELS } from '@/lib/supabase'
+import { supabase, Articulo, CarritoItem, MetodoPago, METODO_PAGO_LABELS, Comision } from '@/lib/supabase'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Search, Plus, Minus, Trash2, ShoppingCart, CreditCard, Banknote, CheckCircle2, AlertCircle, X, Package, ArrowLeft, UtensilsCrossed, Sofa, Lamp, Coffee, Bath, Percent, Wallet } from 'lucide-react'
 
@@ -34,10 +34,12 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const [descuentoContado, setDescuentoContado] = useState(false)
   // Payment: multiple methods with amounts
   const [pagos, setPagos] = useState<{metodo:MetodoPago;monto:string;cuotas:number}[]>([{metodo:'efectivo',monto:'',cuotas:1}])
+  const [comisiones, setComisiones] = useState<Comision[]>([])
   const searchRef = useRef<HTMLInputElement>(null)
 
-  useEffect(()=>{fetchArticulos()},[])
+  useEffect(()=>{fetchArticulos();fetchComisiones()},[])
   async function fetchArticulos(){const{data}=await supabase.from('articulos').select('*').eq('activo',true).gt('cantidad',0).order('descripcion');if(data)setArticulos(data)}
+  async function fetchComisiones(){const{data}=await supabase.from('comisiones').select('*').eq('activo',true);if(data)setComisiones(data)}
 
   useEffect(()=>{
     if(search.length>=2){const q=search.toLowerCase();setResults(articulos.filter(a=>a.descripcion.toLowerCase().includes(q)||a.codigo?.toLowerCase().includes(q)||a.proveedor?.toLowerCase().includes(q)).slice(0,15))}
@@ -58,6 +60,25 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const totalPagado=pagos.reduce((s,p)=>s+(parseFloat(p.monto)||0),0)
   const ajuste=totalPagado-total
 
+  // Calculate commissions for each payment
+  function getComisionPct(metodo:MetodoPago, cuotas:number):number {
+    const applicable = comisiones.filter(c => c.tipo_billetera === metodo)
+    if (metodo === 'tarjeta_credito') {
+      const specific = applicable.find(c => c.cuotas === cuotas)
+      if (specific) return specific.porcentaje
+    }
+    const general = applicable.find(c => !c.cuotas)
+    return general?.porcentaje ?? 0
+  }
+
+  const totalComision = pagos.reduce((s, p) => {
+    const monto = parseFloat(p.monto) || 0
+    const pct = getComisionPct(p.metodo, p.cuotas)
+    return s + (monto * pct / 100)
+  }, 0)
+
+  const netoReal = totalPagado - totalComision
+
   function addPago(){setPagos(p=>[...p,{metodo:'transferencia',monto:'',cuotas:1}])}
   function removePago(idx:number){setPagos(p=>p.filter((_,i)=>i!==idx))}
   function updatePago(idx:number,field:string,val:any){setPagos(p=>p.map((x,i)=>i===idx?{...x,[field]:val}:x))}
@@ -75,14 +96,14 @@ export default function VentasModule({ onVentaCompleta }: Props) {
       if(descuentoContado) notaParts.push(`Descuento contado 10%: -${formatCurrency(descuentoMonto)}`)
       if(ajuste!==0) notaParts.push(`Ajuste: ${formatCurrency(ajuste)}`)
 
-      const{data:venta,error:ve}=await supabase.from('ventas').insert([{total,metodo_pago:mainPago.metodo,cuotas:mainPago.metodo==='tarjeta_credito'?mainPago.cuotas:1,nota:notaParts.length>0?notaParts.join(' | '):null}]).select().single()
+      const{data:venta,error:ve}=await supabase.from('ventas').insert([{total,metodo_pago:mainPago.metodo,cuotas:mainPago.metodo==='tarjeta_credito'?mainPago.cuotas:1,nota:notaParts.length>0?notaParts.join(' | '):null,comision:totalComision,neto:netoReal}]).select().single()
       if(ve)throw ve
       const items=carrito.map(i=>({venta_id:venta.id,articulo_id:i.articulo.id,cantidad:i.cantidad,precio_unitario:i.articulo.precio_venta,subtotal:i.articulo.precio_venta*i.cantidad}))
       const{error:ie}=await supabase.from('venta_items').insert(items);if(ie)throw ie
       for(const item of carrito)await supabase.from('articulos').update({cantidad:item.articulo.cantidad-item.cantidad}).eq('id',item.articulo.id)
 
-      // Update billetera for each payment method
-      for(const p of pagos){const m=parseFloat(p.monto)||0;if(m<=0)continue;const{data:b}=await supabase.from('billetera').select('*').eq('tipo',p.metodo).single();if(b)await supabase.from('billetera').update({saldo:b.saldo+m}).eq('id',b.id)}
+      // Update billetera for each payment method (sum neto = monto - comision)
+      for(const p of pagos){const m=parseFloat(p.monto)||0;if(m<=0)continue;const pct=getComisionPct(p.metodo,p.cuotas);const neto=m-(m*pct/100);const{data:b}=await supabase.from('billetera').select('*').eq('tipo',p.metodo).single();if(b)await supabase.from('billetera').update({saldo:b.saldo+neto}).eq('id',b.id)}
 
       setVentaExitosa(true);setCarrito([]);setPagos([{metodo:'efectivo',monto:'',cuotas:1}]);setDescuentoContado(false);fetchArticulos();onVentaCompleta()
       setTimeout(()=>setVentaExitosa(false),3000)
@@ -166,6 +187,17 @@ export default function VentasModule({ onVentaCompleta }: Props) {
               {totalPagado>0&&ajuste!==0&&(
                 <div className={cn("flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg text-xs",ajuste>0?"bg-amber-50 text-amber-700":"bg-red-50 text-red-600")}>
                   <span>{ajuste>0?'Vuelto / Ajuste':'Falta cobrar'}</span><span className="font-semibold">{formatCurrency(Math.abs(ajuste))}</span>
+                </div>
+              )}
+              {totalComision>0&&(
+                <div className="flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg text-xs bg-purple-50 text-purple-700">
+                  <span>Comisión ({pagos.map(p=>{const pct=getComisionPct(p.metodo,p.cuotas);return pct>0?`${pct}%`:null}).filter(Boolean).join(' + ')})</span>
+                  <span className="font-semibold">-{formatCurrency(totalComision)}</span>
+                </div>
+              )}
+              {totalComision>0&&(
+                <div className="flex items-center justify-between px-2 py-1 text-xs text-gray-500">
+                  <span>Neto real en caja</span><span className="font-semibold text-gray-700">{formatCurrency(netoReal)}</span>
                 </div>
               )}
             </div>

@@ -11,6 +11,15 @@ export const METODO_PAGO_LABELS: Record<MetodoPago, string> = {
   efectivo: 'Efectivo', transferencia: 'Transferencia', tarjeta_debito: 'Tarjeta Débito', tarjeta_credito: 'Tarjeta Crédito'
 }
 
+// Display labels for billetera (banco agrupa transf/td/tc)
+export const BILLETERA_LABELS: Record<MetodoPago, string> = {
+  efectivo: 'Efectivo', transferencia: 'Banco - Transferencia', tarjeta_debito: 'Banco - T. Débito', tarjeta_credito: 'Banco - T. Crédito'
+}
+
+export const BILLETERA_GRUPO: Record<MetodoPago, 'efectivo' | 'banco'> = {
+  efectivo: 'efectivo', transferencia: 'banco', tarjeta_debito: 'banco', tarjeta_credito: 'banco'
+}
+
 export interface Articulo {
   id: number; proveedor: string; codigo: string; descripcion: string; cantidad: number
   costo_unitario: number; precio_comparativo: number | null; precio_venta: number
@@ -19,7 +28,8 @@ export interface Articulo {
 
 export interface Venta {
   id: number; fecha: string; total: number; metodo_pago: MetodoPago
-  estado: 'completada' | 'anulada'; nota: string | null; cuotas: number; created_at: string
+  estado: 'completada' | 'anulada'; nota: string | null; cuotas: number
+  comision: number; neto: number | null; created_at: string
 }
 
 export interface VentaItem {
@@ -63,8 +73,7 @@ export interface OrdenPago {
 export interface OrdenCompra {
   id: number; proveedor_id: number; numero: string | null; fecha: string
   estado: 'borrador' | 'enviada' | 'recibida' | 'anulada'
-  subtotal: number; iva: number; total: number
-  nota: string | null; created_at: string
+  subtotal: number; iva: number; total: number; nota: string | null; created_at: string
 }
 
 export interface OrdenCompraItem {
@@ -73,11 +82,20 @@ export interface OrdenCompraItem {
 }
 
 export interface Gasto {
-  id: number; descripcion: string; monto: number
-  metodo_pago: MetodoPago; fecha: string
+  id: number; descripcion: string; monto: number; metodo_pago: MetodoPago; fecha: string
   proveedor_id: number | null; tiene_comprobante: boolean
   tipo_comprobante: string | null; numero_comprobante: string | null
   nota: string | null; created_at: string
+}
+
+export interface Comision {
+  id: number; tipo_billetera: string; porcentaje: number
+  descripcion: string | null; cuotas: number | null; activo: boolean; created_at: string
+}
+
+export interface MovimientoCaja {
+  id: number; desde: string; hacia: string; monto: number
+  nota: string | null; fecha: string; created_at: string
 }
 
 export const COMPROBANTE_LABELS: Record<TipoComprobante, string> = {

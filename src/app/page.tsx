@@ -7,11 +7,11 @@ import ArticulosModule from '@/components/ArticulosModule'
 import VentasModule from '@/components/VentasModule'
 import HistorialVentas from '@/components/HistorialVentas'
 import ProveedoresModule from '@/components/ProveedoresModule'
+import CajaPanel from '@/components/CajaPanel'
 import {
   Package,
   ShoppingCart,
   Receipt,
-  Wallet,
   ChevronRight,
   Home,
   Menu,
@@ -41,11 +41,6 @@ export default function HomePage() {
     const { data } = await supabase.from('billetera').select('*').order('id')
     if (data) setBilletera(data)
   }
-
-  const efectivo = billetera.find(b => b.tipo === 'efectivo')?.saldo ?? 0
-  const transferencia = billetera.find(b => b.tipo === 'transferencia')?.saldo ?? 0
-  const tdebito = billetera.find(b => b.tipo === 'tarjeta_debito')?.saldo ?? 0
-  const tcredito = billetera.find(b => b.tipo === 'tarjeta_credito')?.saldo ?? 0
 
   const modules = [
     { id: 'ventas' as Module, label: 'Punto de Venta', icon: ShoppingCart, desc: 'Registrar ventas' },
@@ -122,45 +117,8 @@ export default function HomePage() {
           })}
         </nav>
 
-        {/* Billetera */}
-        <div className="px-4 py-4 border-t border-white/10">
-          <div className="flex items-center gap-2 mb-3">
-            <Wallet size={14} className="text-white/40" />
-            <span className="text-xs text-white/40 uppercase tracking-wider font-medium">Caja</span>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-              <span className="text-xs text-white/50">Efectivo</span>
-              <span className="text-sm font-semibold text-emerald-400">
-                {formatCurrency(efectivo)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-              <span className="text-xs text-white/50">Transferencia</span>
-              <span className="text-sm font-semibold text-blue-400">
-                {formatCurrency(transferencia)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-              <span className="text-xs text-white/50">T. Débito</span>
-              <span className="text-sm font-semibold text-purple-400">
-                {formatCurrency(tdebito)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-              <span className="text-xs text-white/50">T. Crédito</span>
-              <span className="text-sm font-semibold text-pink-400">
-                {formatCurrency(tcredito)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between px-3 py-1">
-              <span className="text-xs text-white/30">Total</span>
-              <span className="text-sm font-bold text-white/80">
-                {formatCurrency(efectivo + transferencia + tdebito + tcredito)}
-              </span>
-            </div>
-          </div>
-        </div>
+        {/* Caja */}
+        <CajaPanel billetera={billetera} onUpdate={fetchBilletera} />
       </aside>
 
       {/* Main content */}

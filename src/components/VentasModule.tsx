@@ -32,6 +32,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const [error, setError] = useState('')
   const [categoriaActiva, setCategoriaActiva] = useState<string|null>(null)
   const [descuentoContado, setDescuentoContado] = useState(false)
+  const [descuentoTransf, setDescuentoTransf] = useState(false)
   // Payment: multiple methods with amounts
   const [pagos, setPagos] = useState<{metodo:MetodoPago;monto:string;cuotas:number}[]>([{metodo:'efectivo',monto:'',cuotas:1}])
   const [comisiones, setComisiones] = useState<Comision[]>([])
@@ -51,10 +52,10 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   function addToCart(a:Articulo){setCarrito(prev=>{const ex=prev.find(i=>i.articulo.id===a.id);if(ex){if(ex.cantidad>=a.cantidad){setError(`Stock máx: ${a.cantidad}`);setTimeout(()=>setError(''),2500);return prev}return prev.map(i=>i.articulo.id===a.id?{...i,cantidad:i.cantidad+1}:i)}return[...prev,{articulo:a,cantidad:1}]});setSearch('');if(!categoriaActiva)setResults([])}
   function updateQty(id:number,d:number){setCarrito(prev=>prev.map(i=>{if(i.articulo.id!==id)return i;const q=i.cantidad+d;if(q<=0||q>i.articulo.cantidad)return i;return{...i,cantidad:q}}))}
   const removeFromCart=(id:number)=>setCarrito(prev=>prev.filter(i=>i.articulo.id!==id))
-  const clearCart=()=>{setCarrito([]);setPagos([{metodo:'efectivo',monto:'',cuotas:1}]);setError('');setDescuentoContado(false)}
+  const clearCart=()=>{setCarrito([]);setPagos([{metodo:'efectivo',monto:'',cuotas:1}]);setError('');setDescuentoContado(false);setDescuentoTransf(false)}
 
   const subtotal=carrito.reduce((s,i)=>s+(i.articulo.precio_venta*i.cantidad),0)
-  const descuentoMonto=descuentoContado?subtotal*0.10:0
+  const descuentoMonto=descuentoContado?subtotal*0.10:descuentoTransf?subtotal*0.05:0
   const total=subtotal-descuentoMonto
   const totalItems=carrito.reduce((s,i)=>s+i.cantidad,0)
   const totalPagado=pagos.reduce((s,p)=>s+(parseFloat(p.monto)||0),0)
@@ -94,6 +95,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
       if(pagos.length>1){const desc=pagos.filter(p=>parseFloat(p.monto)>0).map(p=>`${METODO_PAGO_LABELS[p.metodo]} ${formatCurrency(parseFloat(p.monto)||0)}${p.metodo==='tarjeta_credito'&&p.cuotas>1?` (${p.cuotas} cuotas)`:''}`).join(' + ');notaParts.push(`Pago mixto: ${desc}`)}
       else if(mainPago.metodo==='tarjeta_credito'&&mainPago.cuotas>1) notaParts.push(`Tarjeta crédito ${mainPago.cuotas} cuotas`)
       if(descuentoContado) notaParts.push(`Descuento contado 10%: -${formatCurrency(descuentoMonto)}`)
+      if(descuentoTransf) notaParts.push(`Descuento transferencia 5%: -${formatCurrency(descuentoMonto)}`)
       if(ajuste!==0) notaParts.push(`Ajuste: ${formatCurrency(ajuste)}`)
 
       const{data:venta,error:ve}=await supabase.from('ventas').insert([{total,metodo_pago:mainPago.metodo,cuotas:mainPago.metodo==='tarjeta_credito'?mainPago.cuotas:1,nota:notaParts.length>0?notaParts.join(' | '):null,comision:totalComision,neto:netoReal}]).select().single()
@@ -141,7 +143,19 @@ export default function VentasModule({ onVentaCompleta }: Props) {
         {carrito.length>0&&(
           <div className="border-t border-gray-100 px-4 py-4 space-y-3 max-h-[55vh] overflow-auto">
             <div className="flex items-center justify-between"><span className="text-sm text-gray-500">Subtotal ({totalItems} art.)</span><span className="text-sm text-gray-700">{formatCurrency(subtotal)}</span></div>
-            <label className="flex items-center gap-2 cursor-pointer group"><input type="checkbox" checked={descuentoContado} onChange={e=>{setDescuentoContado(e.target.checked);if(e.target.checked&&pagos.length===1){updatePago(0,'monto',(subtotal*0.9).toString())}}} className="w-4 h-4 rounded border-gray-300 text-kira-500 focus:ring-kira-400"/><Percent size={13} className="text-kira-500"/><span className="text-xs text-gray-600 group-hover:text-gray-800">Descuento contado 10%</span>{descuentoContado&&<span className="text-xs font-semibold text-emerald-600 ml-auto">-{formatCurrency(descuentoMonto)}</span>}</label>
+            <div className="flex gap-3">
+              <label className="flex items-center gap-1.5 cursor-pointer group flex-1">
+                <input type="checkbox" checked={descuentoContado} onChange={e=>{setDescuentoContado(e.target.checked);if(e.target.checked){setDescuentoTransf(false);if(pagos.length===1){updatePago(0,'metodo','efectivo');updatePago(0,'monto',(subtotal*0.9).toString())}}}} className="w-4 h-4 rounded border-gray-300 text-emerald-500 focus:ring-emerald-400"/>
+                <Banknote size={12} className="text-emerald-500"/>
+                <span className="text-[11px] text-gray-600 group-hover:text-gray-800">Dto. contado 10%</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer group flex-1">
+                <input type="checkbox" checked={descuentoTransf} onChange={e=>{setDescuentoTransf(e.target.checked);if(e.target.checked){setDescuentoContado(false);if(pagos.length===1){updatePago(0,'metodo','transferencia');updatePago(0,'monto',(subtotal*0.95).toString())}}}} className="w-4 h-4 rounded border-gray-300 text-blue-500 focus:ring-blue-400"/>
+                <CreditCard size={12} className="text-blue-500"/>
+                <span className="text-[11px] text-gray-600 group-hover:text-gray-800">Dto. transf. 5%</span>
+              </label>
+            </div>
+            {(descuentoContado||descuentoTransf)&&<div className="flex items-center justify-between"><span className="text-xs text-gray-400">{descuentoContado?'Descuento contado 10%':'Descuento transferencia 5%'}</span><span className="text-xs font-semibold text-emerald-600">-{formatCurrency(descuentoMonto)}</span></div>}
             <div className="flex items-center justify-between"><span className="text-sm font-medium text-gray-700">Total</span><span style={{fontFamily:'var(--font-display)'}} className="text-2xl font-bold text-gray-900">{formatCurrency(total)}</span></div>
 
             {/* Payment methods */}

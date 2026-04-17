@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { supabase, Billetera, Comision, MetodoPago, BILLETERA_LABELS, BILLETERA_GRUPO } from '@/lib/supabase'
+import { supabase, Billetera, Comision, Posnet, PosnetComision, MetodoPago, BILLETERA_LABELS, BILLETERA_GRUPO } from '@/lib/supabase'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Wallet, ArrowRightLeft, X, Plus, Save, Trash2, Percent } from 'lucide-react'
 
@@ -14,15 +14,31 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
   const [showMov, setShowMov] = useState(false)
   const [showCom, setShowCom] = useState<MetodoPago | null>(null)
   const [comisiones, setComisiones] = useState<Comision[]>([])
-  const [movForm, setMovForm] = useState({ desde: 'efectivo', hacia: 'transferencia', monto: '', nota: '' })
-  const [comForm, setComForm] = useState({ porcentaje: '', descripcion: '', cuotas: '' })
+  const [posnets, setPosnets] = useState<Posnet[]>([])
+  const [posnetComs, setPosnetComs] = useState<PosnetComision[]>([])
+  const [showPosnets, setShowPosnets] = useState(false)
+  const [newPosnet, setNewPosnet] = useState('')
+  const [editPosnetId, setEditPosnetId] = useState<number|null>(null)
+  const [pcForm, setPcForm] = useState({tipo:'debito' as 'debito'|'credito',cuotas:'1',porcentaje:'',descripcion:''})
 
-  useEffect(() => { fetchComisiones() }, [])
+  useEffect(() => { fetchComisiones(); fetchPosnets() }, [])
 
   async function fetchComisiones() {
     const { data } = await supabase.from('comisiones').select('*').eq('activo', true).order('id')
     if (data) setComisiones(data)
   }
+
+  async function fetchPosnets() {
+    const{data:p}=await supabase.from('posnets').select('*').eq('activo',true).order('nombre')
+    if(p)setPosnets(p)
+    const{data:pc}=await supabase.from('posnet_comisiones').select('*').eq('activo',true)
+    if(pc)setPosnetComs(pc)
+  }
+
+  async function addPosnet(){if(!newPosnet)return;await supabase.from('posnets').insert([{nombre:newPosnet}]);setNewPosnet('');fetchPosnets()}
+  async function deletePosnet(id:number){await supabase.from('posnets').update({activo:false}).eq('id',id);fetchPosnets()}
+  async function addPosnetComision(){if(!editPosnetId)return;const pct=parseFloat(pcForm.porcentaje)||0;await supabase.from('posnet_comisiones').insert([{posnet_id:editPosnetId,tipo:pcForm.tipo,cuotas:parseInt(pcForm.cuotas)||1,porcentaje:pct,descripcion:pcForm.descripcion||null}]);setPcForm({tipo:'debito',cuotas:'1',porcentaje:'',descripcion:''});fetchPosnets()}
+  async function deletePosnetCom(id:number){await supabase.from('posnet_comisiones').update({activo:false}).eq('id',id);fetchPosnets()}
 
   async function hacerMovimiento() {
     const monto = parseFloat(movForm.monto) || 0
@@ -214,6 +230,50 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
           )}
         </div>
       )}
+
+      {/* Posnets section */}
+      <div className="mt-3">
+        <button onClick={()=>setShowPosnets(!showPosnets)} className={cn("w-full flex items-center justify-between text-[10px] px-2 py-1.5 rounded transition-colors",showPosnets?"bg-purple-500/10 text-purple-300":"text-white/30 hover:text-white/50 hover:bg-white/5")}>
+          <span className="flex items-center gap-1"><Wallet size={10}/>Posnets</span>
+          <span>{posnets.length}</span>
+        </button>
+        {showPosnets&&(
+          <div className="mt-2 p-2.5 bg-white/5 rounded-lg space-y-2 animate-fade-in">
+            {/* Posnet list */}
+            {posnets.map(pos=>(
+              <div key={pos.id} className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <button onClick={()=>setEditPosnetId(editPosnetId===pos.id?null:pos.id)} className={cn("text-[11px] font-semibold",editPosnetId===pos.id?"text-purple-300":"text-white/70 hover:text-white")}>{pos.nombre}</button>
+                  <button onClick={()=>deletePosnet(pos.id)} className="p-0.5 hover:bg-white/10 rounded"><Trash2 size={9} className="text-white/20 hover:text-red-400"/></button>
+                </div>
+                {/* Show comisiones for this posnet */}
+                {editPosnetId===pos.id&&(
+                  <div className="pl-2 space-y-1 animate-fade-in">
+                    {posnetComs.filter(pc=>pc.posnet_id===pos.id).map(pc=>(
+                      <div key={pc.id} className="flex items-center justify-between bg-white/5 rounded px-2 py-1">
+                        <span className="text-[10px] text-white/60">{pc.tipo==='debito'?'Débito':'Crédito'}{pc.cuotas>1?` ${pc.cuotas}c`:''}: <span className="text-white/80 font-semibold">{pc.porcentaje}%</span>{pc.descripcion&&` · ${pc.descripcion}`}</span>
+                        <button onClick={()=>deletePosnetCom(pc.id)} className="p-0.5"><Trash2 size={8} className="text-white/20 hover:text-red-400"/></button>
+                      </div>
+                    ))}
+                    <div className="flex gap-1 mt-1">
+                      <select value={pcForm.tipo} onChange={e=>setPcForm(f=>({...f,tipo:e.target.value as any}))} className="bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 w-16"><option value="debito" className="text-black">Débito</option><option value="credito" className="text-black">Crédito</option></select>
+                      {pcForm.tipo==='credito'&&<input type="number" placeholder="Cuotas" value={pcForm.cuotas} onChange={e=>setPcForm(f=>({...f,cuotas:e.target.value}))} className="w-12 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20"/>}
+                      <input type="number" placeholder="%" value={pcForm.porcentaje} onChange={e=>setPcForm(f=>({...f,porcentaje:e.target.value}))} className="w-12 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20"/>
+                      <input placeholder="Desc." value={pcForm.descripcion} onChange={e=>setPcForm(f=>({...f,descripcion:e.target.value}))} className="flex-1 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20"/>
+                      <button onClick={addPosnetComision} className="px-1.5 py-1 bg-purple-500 text-white text-[9px] rounded hover:bg-purple-600"><Plus size={10}/></button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {/* Add new posnet */}
+            <div className="flex gap-1.5 pt-1 border-t border-white/5">
+              <input placeholder="Nuevo posnet..." value={newPosnet} onChange={e=>setNewPosnet(e.target.value)} className="flex-1 bg-white/10 text-white text-[10px] rounded px-2 py-1.5 border-0 placeholder:text-white/20"/>
+              <button onClick={addPosnet} className="px-2 py-1.5 bg-purple-500 text-white text-[9px] rounded hover:bg-purple-600 font-medium">Agregar</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

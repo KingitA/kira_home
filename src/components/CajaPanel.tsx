@@ -14,6 +14,7 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
   const [showMov, setShowMov] = useState(false)
   const [showCom, setShowCom] = useState<MetodoPago | null>(null)
   const [comisiones, setComisiones] = useState<Comision[]>([])
+  const [movForm, setMovForm] = useState({ desde: 'efectivo', hacia: 'transferencia', monto: '', nota: '' })
   const [posnets, setPosnets] = useState<Posnet[]>([])
   const [posnetComs, setPosnetComs] = useState<PosnetComision[]>([])
   const [showPosnets, setShowPosnets] = useState(false)

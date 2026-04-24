@@ -69,7 +69,6 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const total = subtotal - dtoMonto
   const totalItems = cart.reduce((s, i) => s + i.cantidad, 0)
   const totalPagado = pagos.reduce((s, p) => s + (parseFloat(p.monto) || 0), 0)
-  const ajuste = totalPagado - totalConRecargo
 
   function addPago() { setPagos(p => [...p, { metodo: 'transferencia', monto: '', cuotas: 1, posnetId: null }]) }
   function rmPago(i: number) { setPagos(p => p.filter((_, j) => j !== i)) }
@@ -99,6 +98,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   }, 0)
 
   const totalConRecargo = total + totalRecargo
+  const ajuste = totalPagado - totalConRecargo
 
   // Commission is calculated on the amount WITH recargo
   const totalComision = pagos.reduce((s, p) => {

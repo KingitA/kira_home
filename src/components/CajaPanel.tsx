@@ -15,7 +15,7 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
   const [showPosnets, setShowPosnets] = useState(false)
   const [newPosnet, setNewPosnet] = useState('')
   const [editPosnetId, setEditPosnetId] = useState<number | null>(null)
-  const [pcForm, setPcForm] = useState({ tipo: 'debito' as 'debito' | 'credito', cuotas: '1', porcentaje: '', descripcion: '' })
+  const [pcForm, setPcForm] = useState({ tipo: 'debito' as 'debito' | 'credito', cuotas: '1', porcentaje: '', recargo: '0', descripcion: '' })
 
   useEffect(() => { fetchPosnets() }, [])
 
@@ -45,8 +45,8 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
   async function deletePosnet(id: number) { await supabase.from('posnets').update({ activo: false }).eq('id', id); fetchPosnets() }
   async function addPosnetCom() {
     if (!editPosnetId) return
-    await supabase.from('posnet_comisiones').insert([{ posnet_id: editPosnetId, tipo: pcForm.tipo, cuotas: parseInt(pcForm.cuotas) || 1, porcentaje: parseFloat(pcForm.porcentaje) || 0, descripcion: pcForm.descripcion || null }])
-    setPcForm({ tipo: 'debito', cuotas: '1', porcentaje: '', descripcion: '' })
+    await supabase.from('posnet_comisiones').insert([{ posnet_id: editPosnetId, tipo: pcForm.tipo, cuotas: parseInt(pcForm.cuotas) || 1, porcentaje: parseFloat(pcForm.porcentaje) || 0, recargo: parseFloat(pcForm.recargo) || 0, descripcion: pcForm.descripcion || null }])
+    setPcForm({ tipo: 'debito', cuotas: '1', porcentaje: '', recargo: '0', descripcion: '' })
     fetchPosnets()
   }
   async function deletePosnetCom(id: number) { await supabase.from('posnet_comisiones').update({ activo: false }).eq('id', id); fetchPosnets() }
@@ -156,7 +156,8 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
                       <div key={pc.id} className="flex items-center justify-between bg-white/5 rounded px-2 py-1">
                         <span className="text-[10px] text-white/60">
                           {pc.tipo === 'debito' ? 'Débito' : 'Crédito'}{pc.cuotas > 1 ? ` ${pc.cuotas}c` : ''}:
-                          <span className="text-white/80 font-semibold ml-1">{pc.porcentaje}%</span>
+                          <span className="text-white/80 font-semibold ml-1">{pc.porcentaje}% com.</span>
+                          {(pc.recargo ?? 0) > 0 && <span className="text-orange-400 ml-1">+{pc.recargo}% recargo</span>}
                           {pc.descripcion && <span className="text-white/40 ml-1">· {pc.descripcion}</span>}
                         </span>
                         <button onClick={() => deletePosnetCom(pc.id)} className="p-0.5">
@@ -175,8 +176,11 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
                           onChange={e => setPcForm(f => ({ ...f, cuotas: e.target.value }))}
                           className="w-12 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20" />
                       )}
-                      <input type="number" placeholder="%" value={pcForm.porcentaje}
+                      <input type="number" placeholder="% com" value={pcForm.porcentaje}
                         onChange={e => setPcForm(f => ({ ...f, porcentaje: e.target.value }))}
+                        className="w-12 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20" />
+                      <input type="number" placeholder="% rec" value={pcForm.recargo}
+                        onChange={e => setPcForm(f => ({ ...f, recargo: e.target.value }))}
                         className="w-12 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20" />
                       <input placeholder="Desc." value={pcForm.descripcion}
                         onChange={e => setPcForm(f => ({ ...f, descripcion: e.target.value }))}

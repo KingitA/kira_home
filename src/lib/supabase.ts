@@ -99,8 +99,8 @@ export interface Posnet {
 
 export interface PosnetComision {
   id: number; posnet_id: number; tipo: 'debito' | 'credito'
-  cuotas: number; porcentaje: number; descripcion: string | null
-  activo: boolean; created_at: string
+  cuotas: number; porcentaje: number; recargo: number
+  descripcion: string | null; activo: boolean; created_at: string
 }
 
 export interface MovimientoCaja {

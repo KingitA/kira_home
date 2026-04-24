@@ -69,28 +69,43 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const total = subtotal - dtoMonto
   const totalItems = cart.reduce((s, i) => s + i.cantidad, 0)
   const totalPagado = pagos.reduce((s, p) => s + (parseFloat(p.monto) || 0), 0)
-  const ajuste = totalPagado - total
+  const ajuste = totalPagado - totalConRecargo
 
   function addPago() { setPagos(p => [...p, { metodo: 'transferencia', monto: '', cuotas: 1, posnetId: null }]) }
   function rmPago(i: number) { setPagos(p => p.filter((_, j) => j !== i)) }
   function updPago(i: number, f: string, v: any) { setPagos(p => p.map((x, j) => j === i ? { ...x, [f]: v } : x)) }
-  function setTodo(i: number) { const o = pagos.reduce((s, p, j) => j === i ? s : s + (parseFloat(p.monto) || 0), 0); updPago(i, 'monto', (total - o).toString()) }
+  function setTodo(i: number) { const o = pagos.reduce((s, p, j) => j === i ? s : s + (parseFloat(p.monto) || 0), 0); updPago(i, 'monto', (totalConRecargo - o).toString()) }
 
-  // Get posnet commission for a payment line
-  function getPosnetCom(p: PagoLine): number {
-    if (!p.posnetId) return 0
+  // Get posnet commission AND recargo for a payment line
+  function getPosnetInfo(p: PagoLine): { pct: number; recargo: number } {
+    if (!p.posnetId) return { pct: 0, recargo: 0 }
     const tipo = p.metodo === 'tarjeta_debito' ? 'debito' : 'credito'
     const comps = posComs.filter(pc => pc.posnet_id === p.posnetId && pc.tipo === tipo)
-    if (tipo === 'credito') {
+    if (tipo === 'credito' && p.cuotas > 1) {
       const exact = comps.find(pc => pc.cuotas === p.cuotas)
-      if (exact) return exact.porcentaje
+      if (exact) return { pct: exact.porcentaje, recargo: exact.recargo ?? 0 }
     }
     const base = comps.find(pc => pc.cuotas === 1) || comps[0]
-    return base?.porcentaje ?? 0
+    return { pct: base?.porcentaje ?? 0, recargo: base?.recargo ?? 0 }
   }
 
   const isTarjeta = (m: MetodoPago) => m === 'tarjeta_debito' || m === 'tarjeta_credito'
-  const totalComision = pagos.reduce((s, p) => { const m = parseFloat(p.monto) || 0; return s + (m * getPosnetCom(p) / 100) }, 0)
+
+  // Calculate recargo on the total (increases what the client pays)
+  const totalRecargo = pagos.reduce((s, p) => {
+    const { recargo } = getPosnetInfo(p)
+    if (recargo <= 0) return s
+    return s + (total * recargo / 100)
+  }, 0)
+
+  const totalConRecargo = total + totalRecargo
+
+  // Commission is calculated on the amount WITH recargo
+  const totalComision = pagos.reduce((s, p) => {
+    const m = parseFloat(p.monto) || 0
+    const { pct } = getPosnetInfo(p)
+    return s + (m * pct / 100)
+  }, 0)
   const netoReal = totalPagado - totalComision
 
   async function procesarVenta() {
@@ -112,11 +127,12 @@ export default function VentasModule({ onVentaCompleta }: Props) {
       }
       if (dtoEfectivo) notas.push(`Dto contado 10%: -${formatCurrency(dtoMonto)}`)
       if (dtoTransf) notas.push(`Dto transf 5%: -${formatCurrency(dtoMonto)}`)
+      if (totalRecargo > 0) notas.push(`Recargo financiero ${pagos.map(p => { const { recargo } = getPosnetInfo(p); return recargo > 0 ? `${recargo}%` : null }).filter(Boolean).join('+')}: +${formatCurrency(totalRecargo)}`)
       if (totalComision > 0) notas.push(`Comisión posnet: -${formatCurrency(totalComision)}`)
       if (ajuste !== 0) notas.push(`Ajuste: ${formatCurrency(ajuste)}`)
 
       const { data: venta, error: ve } = await supabase.from('ventas').insert([{
-        total, metodo_pago: main.metodo, cuotas: main.metodo === 'tarjeta_credito' ? main.cuotas : 1,
+        total: totalConRecargo, metodo_pago: main.metodo, cuotas: main.metodo === 'tarjeta_credito' ? main.cuotas : 1,
         nota: notas.length > 0 ? notas.join(' | ') : null, comision: totalComision, neto: netoReal,
         posnet_id: main.posnetId
       }]).select().single()
@@ -128,7 +144,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
       // Billetera: efectivo y transferencia entran al 100%, tarjeta entra neto (menos comision posnet)
       for (const p of pagos) {
         const m = parseFloat(p.monto) || 0; if (m <= 0) continue
-        const pct = isTarjeta(p.metodo) ? getPosnetCom(p) : 0
+        const pct = isTarjeta(p.metodo) ? getPosnetInfo(p).pct : 0
         const neto = m - (m * pct / 100)
         const { data: b } = await supabase.from('billetera').select('*').eq('tipo', p.metodo).single()
         if (b) await supabase.from('billetera').update({ saldo: b.saldo + neto }).eq('id', b.id)
@@ -188,7 +204,8 @@ export default function VentasModule({ onVentaCompleta }: Props) {
             </div>
             {(dtoEfectivo || dtoTransf) && <div className="flex items-center justify-between"><span className="text-xs text-gray-400">{dtoEfectivo ? 'Descuento efectivo 10%' : 'Descuento transferencia 5%'}</span><span className="text-xs font-semibold text-emerald-600">-{formatCurrency(dtoMonto)}</span></div>}
 
-            <div className="flex items-center justify-between"><span className="text-sm font-medium text-gray-700">Total a cobrar</span><span style={{ fontFamily: 'var(--font-display)' }} className="text-2xl font-bold text-gray-900">{formatCurrency(total)}</span></div>
+            <div className="flex items-center justify-between"><span className="text-sm font-medium text-gray-700">Total a cobrar</span><span style={{ fontFamily: 'var(--font-display)' }} className="text-2xl font-bold text-gray-900">{formatCurrency(totalConRecargo)}</span></div>
+            {totalRecargo > 0 && <div className="flex items-center justify-between"><span className="text-xs text-orange-500">Incluye recargo financiero</span><span className="text-xs font-semibold text-orange-600">+{formatCurrency(totalRecargo)}</span></div>}
 
             {/* Pagos */}
             <div>
@@ -198,9 +215,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
               </div>
               <div className="space-y-2">
                 {pagos.map((p, idx) => {
-                  const pct = isTarjeta(p.metodo) ? getPosnetCom(p) : 0
                   const mNum = parseFloat(p.monto) || 0
-                  const comMonto = mNum * pct / 100
                   return (
                     <div key={idx} className="space-y-1.5 pb-2 border-b border-gray-50 last:border-0">
                       <div className="flex items-center gap-2">
@@ -242,13 +257,18 @@ export default function VentasModule({ onVentaCompleta }: Props) {
                           ))}
                         </div>
                       )}
-                      {/* Commission inline */}
-                      {pct > 0 && mNum > 0 && (
-                        <div className="flex items-center justify-between ml-1 text-[10px]">
-                          <span className="text-purple-500">Comisión {posnets.find(x => x.id === p.posnetId)?.nombre} ({pct}%)</span>
-                          <span className="text-purple-600 font-semibold">-{formatCurrency(comMonto)} → Neto: {formatCurrency(mNum - comMonto)}</span>
-                        </div>
-                      )}
+                      {/* Commission and recargo inline */}
+                      {isTarjeta(p.metodo) && p.posnetId && mNum > 0 && (() => {
+                        const { pct: comPct, recargo: recPct } = getPosnetInfo(p)
+                        const comMonto = mNum * comPct / 100
+                        if (comPct === 0 && recPct === 0) return null
+                        return (
+                          <div className="ml-1 space-y-0.5">
+                            {recPct > 0 && <div className="flex items-center justify-between text-[10px]"><span className="text-orange-500">Recargo al cliente {recPct}%</span><span className="text-orange-600 font-semibold">+{formatCurrency(total * recPct / 100)}</span></div>}
+                            {comPct > 0 && <div className="flex items-center justify-between text-[10px]"><span className="text-purple-500">Comisión {posnets.find(x => x.id === p.posnetId)?.nombre} {comPct}%</span><span className="text-purple-600 font-semibold">-{formatCurrency(comMonto)} → Neto: {formatCurrency(mNum - comMonto)}</span></div>}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )
                 })}
@@ -275,7 +295,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
             <button onClick={procesarVenta} disabled={proc || totalPagado <= 0}
               className={cn("w-full py-3 rounded-xl text-white font-semibold text-sm transition-all flex items-center justify-center gap-2",
                 proc || totalPagado <= 0 ? "bg-gray-400 cursor-not-allowed" : "bg-kira-500 hover:bg-kira-600 active:scale-[0.98] shadow-md shadow-kira-500/20")}>
-              {proc ? 'Procesando...' : <><CheckCircle2 size={16} />Cerrar Venta — {formatCurrency(total)}</>}
+              {proc ? 'Procesando...' : <><CheckCircle2 size={16} />Cerrar Venta — {formatCurrency(totalConRecargo)}</>}
             </button>
           </div>
         )}

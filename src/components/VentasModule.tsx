@@ -75,20 +75,32 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   function updPago(i: number, f: string, v: any) { setPagos(p => p.map((x, j) => j === i ? { ...x, [f]: v } : x)) }
   function setTodo(i: number) { const o = pagos.reduce((s, p, j) => j === i ? s : s + (parseFloat(p.monto) || 0), 0); updPago(i, 'monto', (totalConRecargo - o).toString()) }
 
-  // Get posnet commission AND recargo for a payment line
-  function getPosnetInfo(p: PagoLine): { pct: number; recargo: number } {
-    if (!p.posnetId) return { pct: 0, recargo: 0 }
-    const tipo = p.metodo === 'tarjeta_debito' ? 'debito' : 'credito'
-    const comps = posComs.filter(pc => pc.posnet_id === p.posnetId && pc.tipo === tipo)
-    if (tipo === 'credito' && p.cuotas > 1) {
-      const exact = comps.find(pc => pc.cuotas === p.cuotas)
+  const isTarjeta = (m: MetodoPago) => m === 'tarjeta_debito' || m === 'tarjeta_credito'
+
+  // Core lookup — accepts direct params so it can be called BEFORE state updates
+  function getInfoRaw(posnetId: number | null, tipo: 'debito' | 'credito', cuotas: number): { pct: number; recargo: number } {
+    if (!posnetId) return { pct: 0, recargo: 0 }
+    const comps = posComs.filter(pc => pc.posnet_id === posnetId && pc.tipo === tipo)
+    if (tipo === 'credito' && cuotas > 1) {
+      const exact = comps.find(pc => pc.cuotas === cuotas)
       if (exact) return { pct: exact.porcentaje, recargo: exact.recargo ?? 0 }
     }
     const base = comps.find(pc => pc.cuotas === 1) || comps[0]
     return { pct: base?.porcentaje ?? 0, recargo: base?.recargo ?? 0 }
   }
 
-  const isTarjeta = (m: MetodoPago) => m === 'tarjeta_debito' || m === 'tarjeta_credito'
+  function getPosnetInfo(p: PagoLine): { pct: number; recargo: number } {
+    const tipo = p.metodo === 'tarjeta_debito' ? 'debito' : 'credito'
+    return getInfoRaw(p.posnetId, tipo, p.cuotas)
+  }
+
+  // Compute the correct monto for a single pago given prospective config
+  function calcMonto(posnetId: number | null, metodo: MetodoPago, cuotas: number, orderTotal: number): string {
+    if (!isTarjeta(metodo) || !posnetId) return orderTotal.toFixed(2)
+    const tipo = metodo === 'tarjeta_debito' ? 'debito' : 'credito'
+    const { recargo } = getInfoRaw(posnetId, tipo, cuotas)
+    return (orderTotal + orderTotal * recargo / 100).toFixed(2)
+  }
 
   // Calculate recargo on the total (increases what the client pays)
   const totalRecargo = pagos.reduce((s, p) => {
@@ -236,7 +248,14 @@ export default function VentasModule({ onVentaCompleta }: Props) {
                         <div className="flex items-center gap-2 ml-1">
                           <span className="text-[10px] text-gray-400">Posnet:</span>
                           {posnets.map(pos => (
-                            <button key={pos.id} onClick={() => updPago(idx, 'posnetId', p.posnetId === pos.id ? null : pos.id)}
+                            <button key={pos.id} onClick={() => {
+                              const newId = p.posnetId === pos.id ? null : pos.id
+                              setPagos(prev => prev.map((x, j) => j !== idx ? x : {
+                                ...x,
+                                posnetId: newId,
+                                monto: calcMonto(newId, x.metodo, x.cuotas, total)
+                              }))
+                            }}
                               className={cn("px-2 py-0.5 rounded text-[10px] font-medium transition-colors border",
                                 p.posnetId === pos.id ? "bg-purple-100 text-purple-700 border-purple-200" : "bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100")}>
                               {pos.nombre}
@@ -249,7 +268,13 @@ export default function VentasModule({ onVentaCompleta }: Props) {
                         <div className="flex items-center gap-2 ml-1">
                           <span className="text-[10px] text-gray-400">Cuotas:</span>
                           {[1, 3, 6, 12].map(c => (
-                            <button key={c} onClick={() => updPago(idx, 'cuotas', c)}
+                            <button key={c} onClick={() => {
+                              setPagos(prev => prev.map((x, j) => j !== idx ? x : {
+                                ...x,
+                                cuotas: c,
+                                monto: calcMonto(x.posnetId, x.metodo, c, total)
+                              }))
+                            }}
                               className={cn("px-2 py-0.5 rounded text-[10px] font-medium border",
                                 p.cuotas === c ? "bg-pink-100 text-pink-700 border-pink-200" : "bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100")}>
                               {c}

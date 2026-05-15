@@ -117,13 +117,18 @@ export default function ArticulosModule() {
     setImportStep('idle'); setExcelCols([]); setExcelData([]); setMapping({}); setFileName('')
   }
 
+  // Normalize a value for comparison: trim, lowercase, remove extra spaces
+  function norm(v: any): string {
+    return String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ').normalize('NFC')
+  }
+
   // Preview: build what will be updated
   function getPreviewData() {
     const matchCol = Object.entries(mapping).find(([_, v]) => v === matchKey)?.[0]
     if (!matchCol) return []
     return excelData.slice(0, 20).map(row => {
       const matchVal = String(row[matchCol] ?? '').trim()
-      const existing = articulos.find(a => String((a as any)[matchKey] ?? '').trim().toLowerCase() === matchVal.toLowerCase())
+      const existing = articulos.find(a => norm((a as any)[matchKey]) === norm(matchVal))
       const changes: Record<string, { from: any; to: any }> = {}
       Object.entries(mapping).forEach(([exCol, dbField]) => {
         if (!dbField || dbField === matchKey) return
@@ -148,7 +153,7 @@ export default function ArticulosModule() {
       const matchVal = String(row[matchCol] ?? '').trim()
       if (!matchVal) { skipped++; continue }
 
-      const existing = articulos.find(a => String((a as any)[matchKey] ?? '').trim().toLowerCase() === matchVal.toLowerCase())
+      const existing = articulos.find(a => norm((a as any)[matchKey]) === norm(matchVal))
 
       // Build update object
       const updateObj: Record<string, any> = {}

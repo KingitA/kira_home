@@ -6,7 +6,7 @@ import { formatCurrency, cn } from '@/lib/utils'
 import {
   Search, Plus, Pencil, Trash2, X, Check, AlertTriangle,
   ArrowUpDown, Filter, Package, Save, Upload, FileSpreadsheet,
-  ArrowRight, CheckCircle2, AlertCircle, RefreshCw
+  ArrowRight, CheckCircle2, AlertCircle, RefreshCw, Download
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
@@ -62,6 +62,8 @@ export default function ArticulosModule() {
   const [matchKey, setMatchKey] = useState<DbField>('codigo')
   const [importMode, setImportMode] = useState<'update' | 'upsert'>('update')
   const [importResult, setImportResult] = useState({ updated: 0, created: 0, skipped: 0, errors: 0 })
+  const [importLog, setImportLog] = useState<{ codigo: string; estado: 'actualizado' | 'creado' | 'omitido' | 'error'; detalle: string; row: Record<string, any> }[]>([])
+  const [importLogFilter, setImportLogFilter] = useState<'todos' | 'actualizado' | 'creado' | 'omitido' | 'error'>('todos')
   const [fileName, setFileName] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -114,7 +116,7 @@ export default function ArticulosModule() {
   }
 
   function cancelImport() {
-    setImportStep('idle'); setExcelCols([]); setExcelData([]); setMapping({}); setFileName('')
+    setImportStep('idle'); setExcelCols([]); setExcelData([]); setMapping({}); setFileName(''); setImportLog([])
   }
 
   // Normalize a value for comparison: trim, lowercase, remove extra spaces
@@ -148,37 +150,47 @@ export default function ArticulosModule() {
     const matchCol = Object.entries(mapping).find(([_, v]) => v === matchKey)?.[0]
     if (!matchCol) return
     let updated = 0, created = 0, skipped = 0, errors = 0
+    const log: typeof importLog = []
 
     for (const row of excelData) {
       const matchVal = String(row[matchCol] ?? '').trim()
-      if (!matchVal) { skipped++; continue }
+      if (!matchVal) { skipped++; log.push({ codigo: '(vacío)', estado: 'omitido', detalle: 'Código vacío', row }); continue }
 
       const existing = articulos.find(a => norm((a as any)[matchKey]) === norm(matchVal))
 
-      // Build update object
       const updateObj: Record<string, any> = {}
+      const cambios: string[] = []
       Object.entries(mapping).forEach(([exCol, dbField]) => {
         if (!dbField || dbField === matchKey) return
         const val = row[exCol]
         const fieldDef = DB_FIELDS.find(f => f.key === dbField)
-        updateObj[dbField] = fieldDef?.type === 'number' ? (parseFloat(val) || 0) : String(val ?? '')
+        const newVal = fieldDef?.type === 'number' ? (parseFloat(val) || 0) : String(val ?? '')
+        updateObj[dbField] = newVal
+        if (existing) {
+          const oldVal = (existing as any)[dbField]
+          if (String(newVal) !== String(oldVal ?? '')) cambios.push(`${fieldDef?.label}: ${oldVal} → ${newVal}`)
+        }
       })
 
-      if (Object.keys(updateObj).length === 0) { skipped++; continue }
+      if (Object.keys(updateObj).length === 0) { skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'Sin campos mapeados', row }); continue }
 
       if (existing) {
+        if (cambios.length === 0) { skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'Sin cambios', row }); continue }
         const { error } = await supabase.from('articulos').update(updateObj).eq('id', existing.id)
-        if (error) errors++; else updated++
+        if (error) { errors++; log.push({ codigo: matchVal, estado: 'error', detalle: error.message, row }) }
+        else { updated++; log.push({ codigo: matchVal, estado: 'actualizado', detalle: cambios.join(' | '), row }) }
       } else if (importMode === 'upsert') {
         updateObj[matchKey] = matchVal
         if (!updateObj.descripcion) updateObj.descripcion = matchVal
         const { error } = await supabase.from('articulos').insert([updateObj])
-        if (error) errors++; else created++
+        if (error) { errors++; log.push({ codigo: matchVal, estado: 'error', detalle: error.message, row }) }
+        else { created++; log.push({ codigo: matchVal, estado: 'creado', detalle: 'Artículo nuevo', row }) }
       } else {
-        skipped++
+        skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'No encontrado en DB', row })
       }
     }
 
+    setImportLog(log)
     setImportResult({ updated, created, skipped, errors })
     setImportStep('done')
     fetchArticulos()
@@ -376,19 +388,88 @@ export default function ArticulosModule() {
             )}
 
             {/* Step: Done */}
-            {importStep === 'done' && (
-              <div className="p-6 text-center">
-                <CheckCircle2 size={28} className="mx-auto mb-3 text-emerald-500" />
-                <p className="text-sm font-semibold text-gray-700 mb-2">Importación completada</p>
-                <div className="flex justify-center gap-4 text-xs">
-                  {importResult.updated > 0 && <span className="text-blue-600">✓ {importResult.updated} actualizados</span>}
-                  {importResult.created > 0 && <span className="text-emerald-600">+ {importResult.created} creados</span>}
-                  {importResult.skipped > 0 && <span className="text-gray-400">— {importResult.skipped} omitidos</span>}
-                  {importResult.errors > 0 && <span className="text-red-500">✕ {importResult.errors} errores</span>}
+            {importStep === 'done' && (() => {
+              const [logFilter, setLogFilter] = [importLogFilter, setImportLogFilter]
+              const filtered = logFilter === 'todos' ? importLog : importLog.filter(l => l.estado === logFilter)
+
+              function exportLog(items: typeof importLog, name: string) {
+                const ws = XLSX.utils.json_to_sheet(items.map(l => ({ Código: l.codigo, Estado: l.estado, Detalle: l.detalle, ...l.row })))
+                const wb = XLSX.utils.book_new()
+                XLSX.utils.book_append_sheet(wb, ws, 'Resultado')
+                XLSX.writeFile(wb, `importacion_${name}_${new Date().toISOString().slice(0, 10)}.xlsx`)
+              }
+
+              return (
+                <div className="p-4 space-y-4">
+                  <div className="text-center">
+                    <CheckCircle2 size={28} className="mx-auto mb-2 text-emerald-500" />
+                    <p className="text-sm font-semibold text-gray-700">Importación completada</p>
+                  </div>
+
+                  {/* Summary cards */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                    <button onClick={() => setImportLogFilter('actualizado')} className={cn("rounded-lg px-3 py-2 text-left border transition-colors", logFilter === 'actualizado' ? "bg-blue-50 border-blue-200" : "bg-white border-gray-100 hover:bg-gray-50")}>
+                      <p className="text-[10px] text-gray-400 uppercase">Actualizados</p>
+                      <p className="text-lg font-semibold text-blue-600">{importResult.updated}</p>
+                    </button>
+                    <button onClick={() => setImportLogFilter('creado')} className={cn("rounded-lg px-3 py-2 text-left border transition-colors", logFilter === 'creado' ? "bg-emerald-50 border-emerald-200" : "bg-white border-gray-100 hover:bg-gray-50")}>
+                      <p className="text-[10px] text-gray-400 uppercase">Creados</p>
+                      <p className="text-lg font-semibold text-emerald-600">{importResult.created}</p>
+                    </button>
+                    <button onClick={() => setImportLogFilter('omitido')} className={cn("rounded-lg px-3 py-2 text-left border transition-colors", logFilter === 'omitido' ? "bg-amber-50 border-amber-200" : "bg-white border-gray-100 hover:bg-gray-50")}>
+                      <p className="text-[10px] text-gray-400 uppercase">Omitidos</p>
+                      <p className="text-lg font-semibold text-amber-600">{importResult.skipped}</p>
+                    </button>
+                    <button onClick={() => setImportLogFilter('error')} className={cn("rounded-lg px-3 py-2 text-left border transition-colors", logFilter === 'error' ? "bg-red-50 border-red-200" : "bg-white border-gray-100 hover:bg-gray-50")}>
+                      <p className="text-[10px] text-gray-400 uppercase">Errores</p>
+                      <p className="text-lg font-semibold text-red-600">{importResult.errors}</p>
+                    </button>
+                  </div>
+
+                  {/* Filter tabs */}
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setImportLogFilter('todos')} className={cn("px-2 py-1 rounded text-[10px] font-medium", logFilter === 'todos' ? "bg-gray-800 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200")}>Todos ({importLog.length})</button>
+                    <div className="flex-1" />
+                    <button onClick={() => exportLog(filtered, logFilter)} className="px-3 py-1.5 text-[10px] bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1"><Download size={10} /> Exportar {logFilter !== 'todos' ? logFilter + 's' : 'todo'}</button>
+                    {logFilter !== 'todos' && <button onClick={() => exportLog(importLog.filter(l => l.estado === 'omitido' || l.estado === 'error'), 'no_importados')} className="px-3 py-1.5 text-[10px] bg-amber-500 text-white rounded hover:bg-amber-600 flex items-center gap-1"><Download size={10} /> Exportar no importados</button>}
+                  </div>
+
+                  {/* Log table */}
+                  <div className="overflow-x-auto rounded-lg border border-gray-100 max-h-[40vh] overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-gray-500 font-medium">Estado</th>
+                          <th className="px-3 py-2 text-left text-gray-500 font-medium">Código</th>
+                          <th className="px-3 py-2 text-left text-gray-500 font-medium">Detalle</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {filtered.map((l, i) => (
+                          <tr key={i} className={cn(l.estado === 'error' && "bg-red-50/50", l.estado === 'omitido' && "bg-amber-50/30")}>
+                            <td className="px-3 py-2">
+                              <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium",
+                                l.estado === 'actualizado' ? "bg-blue-50 text-blue-600" :
+                                l.estado === 'creado' ? "bg-emerald-50 text-emerald-600" :
+                                l.estado === 'error' ? "bg-red-50 text-red-600" :
+                                "bg-amber-50 text-amber-600"
+                              )}>{l.estado}</span>
+                            </td>
+                            <td className="px-3 py-2 font-mono text-gray-700">{l.codigo}</td>
+                            <td className="px-3 py-2 text-gray-500 max-w-[400px] truncate">{l.detalle}</td>
+                          </tr>
+                        ))}
+                        {filtered.length === 0 && <tr><td colSpan={3} className="px-3 py-6 text-center text-gray-400">Sin resultados en esta categoría</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button onClick={cancelImport} className="px-4 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm hover:bg-gray-200">Cerrar</button>
+                  </div>
                 </div>
-                <button onClick={cancelImport} className="mt-4 px-4 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm hover:bg-gray-200">Cerrar</button>
-              </div>
-            )}
+              )
+            })()}
           </div>
         )}
 

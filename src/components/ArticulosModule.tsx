@@ -505,6 +505,7 @@ export default function ArticulosModule() {
               const logItems = (imp.log || []) as { codigo: string; estado: string; detalle: string }[]
 
               function exportHistoryLog(items: typeof logItems, name: string) {
+                if (!imp) return
                 const ws = XLSX.utils.json_to_sheet(items.map(l => ({ Código: l.codigo, Estado: l.estado, Detalle: l.detalle })))
                 const wb = XLSX.utils.book_new()
                 XLSX.utils.book_append_sheet(wb, ws, 'Log')

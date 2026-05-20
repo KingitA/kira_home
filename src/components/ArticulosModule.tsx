@@ -64,6 +64,9 @@ export default function ArticulosModule() {
   const [importResult, setImportResult] = useState({ updated: 0, created: 0, skipped: 0, errors: 0 })
   const [importLog, setImportLog] = useState<{ codigo: string; estado: 'actualizado' | 'creado' | 'omitido' | 'error'; detalle: string; row: Record<string, any> }[]>([])
   const [importLogFilter, setImportLogFilter] = useState<'todos' | 'actualizado' | 'creado' | 'omitido' | 'error'>('todos')
+  const [showHistory, setShowHistory] = useState(false)
+  const [importHistory, setImportHistory] = useState<{ id: number; archivo: string; fecha: string; total_filas: number; actualizados: number; creados: number; omitidos: number; errores: number; log: any[] }[]>([])
+  const [historyDetail, setHistoryDetail] = useState<number | null>(null)
   const [fileName, setFileName] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -117,6 +120,11 @@ export default function ArticulosModule() {
 
   function cancelImport() {
     setImportStep('idle'); setExcelCols([]); setExcelData([]); setMapping({}); setFileName(''); setImportLog([])
+  }
+
+  async function fetchHistory() {
+    const { data } = await supabase.from('importaciones').select('*').order('fecha', { ascending: false }).limit(20)
+    if (data) setImportHistory(data)
   }
 
   // Normalize a value for comparison: trim, lowercase, remove extra spaces
@@ -194,6 +202,12 @@ export default function ArticulosModule() {
     setImportResult({ updated, created, skipped, errors })
     setImportStep('done')
     fetchArticulos()
+    // Save to history
+    await supabase.from('importaciones').insert([{
+      archivo: fileName, total_filas: excelData.length,
+      actualizados: updated, creados: created, omitidos: skipped, errores: errors,
+      log: log.map(l => ({ codigo: l.codigo, estado: l.estado, detalle: l.detalle }))
+    }])
   }
 
   const stockBajo = articulos.filter(a => a.cantidad <= 0).length
@@ -236,6 +250,11 @@ export default function ArticulosModule() {
               <Upload size={15} /><span className="hidden sm:inline">Importar</span>
               <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} className="hidden" />
             </label>
+            <button onClick={() => { setShowHistory(!showHistory); if (!showHistory) fetchHistory() }}
+              className={cn("px-3 py-2.5 rounded-lg border text-sm flex items-center gap-2 transition-colors",
+                showHistory ? "bg-blue-50 border-blue-200 text-blue-700" : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50")}>
+              <FileSpreadsheet size={15} /><span className="hidden sm:inline">Historial</span>
+            </button>
             <button onClick={() => setShowAdd(!showAdd)}
               className="px-4 py-2.5 rounded-lg bg-kira-500 text-white text-sm font-medium hover:bg-kira-600 transition-colors flex items-center gap-2">
               <Plus size={15} /><span className="hidden sm:inline">Agregar</span>
@@ -470,6 +489,81 @@ export default function ArticulosModule() {
                 </div>
               )
             })()}
+          </div>
+        )}
+
+        {/* ========== IMPORT HISTORY ========== */}
+        {showHistory && importStep === 'idle' && (
+          <div className="mb-4 bg-white rounded-xl border border-blue-100 overflow-hidden animate-fade-in">
+            <div className="px-4 py-3 bg-blue-50 border-b border-blue-100 flex items-center justify-between">
+              <div className="flex items-center gap-2"><FileSpreadsheet size={16} className="text-blue-600" /><span className="text-sm font-semibold text-blue-800">Historial de importaciones</span></div>
+              <button onClick={() => { setShowHistory(false); setHistoryDetail(null) }} className="p-1 rounded hover:bg-blue-100"><X size={14} className="text-blue-400" /></button>
+            </div>
+            {historyDetail !== null ? (() => {
+              const imp = importHistory.find(h => h.id === historyDetail)
+              if (!imp) return null
+              const logItems = (imp.log || []) as { codigo: string; estado: string; detalle: string }[]
+
+              function exportHistoryLog(items: typeof logItems, name: string) {
+                const ws = XLSX.utils.json_to_sheet(items.map(l => ({ Código: l.codigo, Estado: l.estado, Detalle: l.detalle })))
+                const wb = XLSX.utils.book_new()
+                XLSX.utils.book_append_sheet(wb, ws, 'Log')
+                XLSX.writeFile(wb, `importacion_${imp.archivo}_${name}.xlsx`)
+              }
+
+              return (
+                <div className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button onClick={() => setHistoryDetail(null)} className="text-xs text-blue-600 hover:underline flex items-center gap-1"><ArrowRight size={10} className="rotate-180" /> Volver</button>
+                    <div className="flex gap-2">
+                      <button onClick={() => exportHistoryLog(logItems, 'todo')} className="px-3 py-1.5 text-[10px] bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1"><Download size={10} /> Exportar todo</button>
+                      <button onClick={() => exportHistoryLog(logItems.filter(l => l.estado === 'omitido' || l.estado === 'error'), 'no_importados')} className="px-3 py-1.5 text-[10px] bg-amber-500 text-white rounded hover:bg-amber-600 flex items-center gap-1"><Download size={10} /> No importados</button>
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    <span className="font-medium text-gray-700">{imp.archivo}</span> · {new Date(imp.fecha).toLocaleString('es-AR')} · {imp.total_filas} filas ·
+                    <span className="text-blue-600 ml-1">{imp.actualizados} act.</span> ·
+                    <span className="text-emerald-600 ml-1">{imp.creados} creados</span> ·
+                    <span className="text-amber-600 ml-1">{imp.omitidos} omit.</span> ·
+                    <span className="text-red-600 ml-1">{imp.errores} err.</span>
+                  </div>
+                  <div className="overflow-x-auto rounded-lg border border-gray-100 max-h-[35vh] overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-gray-50"><tr><th className="px-3 py-2 text-left text-gray-500">Estado</th><th className="px-3 py-2 text-left text-gray-500">Código</th><th className="px-3 py-2 text-left text-gray-500">Detalle</th></tr></thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {logItems.map((l, i) => (
+                          <tr key={i} className={cn(l.estado === 'error' && "bg-red-50/50", l.estado === 'omitido' && "bg-amber-50/30")}>
+                            <td className="px-3 py-1.5"><span className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium", l.estado === 'actualizado' ? "bg-blue-50 text-blue-600" : l.estado === 'creado' ? "bg-emerald-50 text-emerald-600" : l.estado === 'error' ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-600")}>{l.estado}</span></td>
+                            <td className="px-3 py-1.5 font-mono text-gray-700">{l.codigo}</td>
+                            <td className="px-3 py-1.5 text-gray-500 max-w-[350px] truncate">{l.detalle}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            })() : (
+              <div className="divide-y divide-gray-50">
+                {importHistory.length === 0 ? <div className="px-4 py-8 text-center text-gray-400 text-sm">Sin importaciones previas</div> :
+                importHistory.map(h => (
+                  <button key={h.id} onClick={() => setHistoryDetail(h.id)} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors">
+                    <FileSpreadsheet size={14} className="text-blue-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">{h.archivo}</p>
+                      <p className="text-xs text-gray-400">
+                        {new Date(h.fecha).toLocaleString('es-AR')} · {h.total_filas} filas ·
+                        <span className="text-blue-500 ml-1">{h.actualizados} act.</span>
+                        <span className="text-emerald-500 ml-1">{h.creados} creados</span>
+                        <span className="text-amber-500 ml-1">{h.omitidos} omit.</span>
+                        {h.errores > 0 && <span className="text-red-500 ml-1">{h.errores} err.</span>}
+                      </p>
+                    </div>
+                    <ArrowRight size={14} className="text-gray-300" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

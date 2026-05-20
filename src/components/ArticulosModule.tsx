@@ -62,7 +62,7 @@ export default function ArticulosModule() {
   const [matchKey, setMatchKey] = useState<DbField>('codigo')
   const [importMode, setImportMode] = useState<'update' | 'upsert'>('update')
   const [importResult, setImportResult] = useState({ updated: 0, created: 0, skipped: 0, errors: 0 })
-  const [importLog, setImportLog] = useState<{ codigo: string; estado: 'actualizado' | 'creado' | 'omitido' | 'error'; detalle: string; row: Record<string, any> }[]>([])
+  const [importLog, setImportLog] = useState<{ codigo: string; estado: 'actualizado' | 'creado' | 'omitido' | 'error'; detalle: string; row: Record<string, any>; articuloId: number | null; valoresAnteriores: Record<string, any> | null }[]>([])
   const [importLogFilter, setImportLogFilter] = useState<'todos' | 'actualizado' | 'creado' | 'omitido' | 'error'>('todos')
   const [showHistory, setShowHistory] = useState(false)
   const [importHistory, setImportHistory] = useState<{ id: number; archivo: string; fecha: string; total_filas: number; actualizados: number; creados: number; omitidos: number; errores: number; log: any[] }[]>([])
@@ -127,6 +127,31 @@ export default function ArticulosModule() {
     if (data) setImportHistory(data)
   }
 
+  const [reverting, setReverting] = useState(false)
+
+  async function revertImport(impId: number) {
+    const imp = importHistory.find(h => h.id === impId)
+    if (!imp) return
+    const revertibles = (imp.log || []).filter((l: any) => l.estado === 'actualizado' && l.articuloId && l.valoresAnteriores)
+    if (revertibles.length === 0) { alert('Esta importación no tiene datos para revertir (fue guardada sin valores anteriores).'); return }
+    if (!confirm(`¿Revertir ${revertibles.length} artículos a sus valores anteriores? Esta acción no se puede deshacer.`)) return
+    setReverting(true)
+    let reverted = 0, errs = 0
+    for (const item of revertibles) {
+      const { articuloId, valoresAnteriores } = item as any
+      if (!articuloId || !valoresAnteriores) continue
+      const { error } = await supabase.from('articulos').update(valoresAnteriores).eq('id', articuloId)
+      if (error) errs++; else reverted++
+    }
+    // Mark import as reverted
+    await supabase.from('importaciones').update({ archivo: imp.archivo + ' [REVERTIDA]' }).eq('id', impId)
+    alert(`Reversión completada: ${reverted} artículos restaurados${errs > 0 ? `, ${errs} errores` : ''}`)
+    setReverting(false)
+    fetchArticulos()
+    fetchHistory()
+    setHistoryDetail(null)
+  }
+
   // Normalize a value for comparison: trim, lowercase, remove extra spaces
   function norm(v: any): string {
     return String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ').normalize('NFC')
@@ -162,12 +187,13 @@ export default function ArticulosModule() {
 
     for (const row of excelData) {
       const matchVal = String(row[matchCol] ?? '').trim()
-      if (!matchVal) { skipped++; log.push({ codigo: '(vacío)', estado: 'omitido', detalle: 'Código vacío', row }); continue }
+      if (!matchVal) { skipped++; log.push({ codigo: '(vacío)', estado: 'omitido', detalle: 'Código vacío', row, articuloId: null, valoresAnteriores: null }); continue }
 
       const existing = articulos.find(a => norm((a as any)[matchKey]) === norm(matchVal))
 
       const updateObj: Record<string, any> = {}
       const cambios: string[] = []
+      const valoresAnt: Record<string, any> = {}
       Object.entries(mapping).forEach(([exCol, dbField]) => {
         if (!dbField || dbField === matchKey) return
         const val = row[exCol]
@@ -176,25 +202,26 @@ export default function ArticulosModule() {
         updateObj[dbField] = newVal
         if (existing) {
           const oldVal = (existing as any)[dbField]
+          valoresAnt[dbField] = oldVal
           if (String(newVal) !== String(oldVal ?? '')) cambios.push(`${fieldDef?.label}: ${oldVal} → ${newVal}`)
         }
       })
 
-      if (Object.keys(updateObj).length === 0) { skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'Sin campos mapeados', row }); continue }
+      if (Object.keys(updateObj).length === 0) { skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'Sin campos mapeados', row, articuloId: null, valoresAnteriores: null }); continue }
 
       if (existing) {
-        if (cambios.length === 0) { skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'Sin cambios', row }); continue }
+        if (cambios.length === 0) { skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'Sin cambios', row, articuloId: existing.id, valoresAnteriores: null }); continue }
         const { error } = await supabase.from('articulos').update(updateObj).eq('id', existing.id)
-        if (error) { errors++; log.push({ codigo: matchVal, estado: 'error', detalle: error.message, row }) }
-        else { updated++; log.push({ codigo: matchVal, estado: 'actualizado', detalle: cambios.join(' | '), row }) }
+        if (error) { errors++; log.push({ codigo: matchVal, estado: 'error', detalle: error.message, row, articuloId: existing.id, valoresAnteriores: null }) }
+        else { updated++; log.push({ codigo: matchVal, estado: 'actualizado', detalle: cambios.join(' | '), row, articuloId: existing.id, valoresAnteriores: valoresAnt }) }
       } else if (importMode === 'upsert') {
         updateObj[matchKey] = matchVal
         if (!updateObj.descripcion) updateObj.descripcion = matchVal
-        const { error } = await supabase.from('articulos').insert([updateObj])
-        if (error) { errors++; log.push({ codigo: matchVal, estado: 'error', detalle: error.message, row }) }
-        else { created++; log.push({ codigo: matchVal, estado: 'creado', detalle: 'Artículo nuevo', row }) }
+        const { data: newArt, error } = await supabase.from('articulos').insert([updateObj]).select().single()
+        if (error) { errors++; log.push({ codigo: matchVal, estado: 'error', detalle: error.message, row, articuloId: null, valoresAnteriores: null }) }
+        else { created++; log.push({ codigo: matchVal, estado: 'creado', detalle: 'Artículo nuevo', row, articuloId: newArt?.id ?? null, valoresAnteriores: null }) }
       } else {
-        skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'No encontrado en DB', row })
+        skipped++; log.push({ codigo: matchVal, estado: 'omitido', detalle: 'No encontrado en DB', row, articuloId: null, valoresAnteriores: null })
       }
     }
 
@@ -202,11 +229,11 @@ export default function ArticulosModule() {
     setImportResult({ updated, created, skipped, errors })
     setImportStep('done')
     fetchArticulos()
-    // Save to history
+    // Save to history with revert data
     await supabase.from('importaciones').insert([{
       archivo: fileName, total_filas: excelData.length,
       actualizados: updated, creados: created, omitidos: skipped, errores: errors,
-      log: log.map(l => ({ codigo: l.codigo, estado: l.estado, detalle: l.detalle }))
+      log: log.map(l => ({ codigo: l.codigo, estado: l.estado, detalle: l.detalle, articuloId: l.articuloId, valoresAnteriores: l.valoresAnteriores }))
     }])
   }
 
@@ -519,6 +546,12 @@ export default function ArticulosModule() {
                     <div className="flex gap-2">
                       <button onClick={() => exportHistoryLog(logItems, 'todo')} className="px-3 py-1.5 text-[10px] bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1"><Download size={10} /> Exportar todo</button>
                       <button onClick={() => exportHistoryLog(logItems.filter(l => l.estado === 'omitido' || l.estado === 'error'), 'no_importados')} className="px-3 py-1.5 text-[10px] bg-amber-500 text-white rounded hover:bg-amber-600 flex items-center gap-1"><Download size={10} /> No importados</button>
+                      {logItems.some((l: any) => l.estado === 'actualizado' && l.valoresAnteriores) && !imp.archivo.includes('[REVERTIDA]') && (
+                        <button onClick={() => revertImport(imp.id)} disabled={reverting}
+                          className="px-3 py-1.5 text-[10px] bg-red-500 text-white rounded hover:bg-red-600 flex items-center gap-1 disabled:opacity-50">
+                          <RefreshCw size={10} className={reverting ? 'animate-spin' : ''} /> {reverting ? 'Revirtiendo...' : 'Revertir importación'}
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="text-xs text-gray-500">

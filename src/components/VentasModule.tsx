@@ -75,7 +75,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   // Paga con logic
   const pagaConNum = parseFloat(pagaCon) || 0
   const vueltoSugerido = pagaConNum > 0 && cond?.tipo === 'efectivo' ? pagaConNum - totalACobrar : 0
-  const vueltoRealNum = vueltoReal !== '' ? parseFloat(vueltoReal) || 0 : vueltoSugerido
+  const vueltoRealNum = vueltoReal !== '' ? (parseFloat(vueltoReal) || 0) : 0
   const entraEnCajaEfectivo = cond?.tipo === 'efectivo' && pagaConNum > 0 ? pagaConNum - vueltoRealNum : netoEnCaja
 
   // Final amount that enters billetera

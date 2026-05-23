@@ -35,6 +35,10 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const [catAct, setCatAct] = useState<string | null>(null)
   const [condiciones, setCondiciones] = useState<CondicionPago[]>([])
   const [condActiva, setCondActiva] = useState<number | null>(null)
+  const [esDebito, setEsDebito] = useState(false)
+  // Paga con / vuelto
+  const [pagaCon, setPagaCon] = useState('')
+  const [vueltoReal, setVueltoReal] = useState('')
   const ref = useRef<HTMLInputElement>(null)
 
   useEffect(() => { load() }, [])
@@ -54,7 +58,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
 
   function addToCart(a: Articulo) { setCart(p => { const e = p.find(i => i.articulo.id === a.id); if (e) { if (e.cantidad >= a.cantidad) { setErr(`Stock máx: ${a.cantidad}`); setTimeout(() => setErr(''), 2500); return p } return p.map(i => i.articulo.id === a.id ? { ...i, cantidad: i.cantidad + 1 } : i) } return [...p, { articulo: a, cantidad: 1 }] }); setSearch(''); if (!catAct) setResults([]) }
   function updQty(id: number, d: number) { setCart(p => p.map(i => { if (i.articulo.id !== id) return i; const q = i.cantidad + d; if (q <= 0 || q > i.articulo.cantidad) return i; return { ...i, cantidad: q } })) }
-  function clearAll() { setCart([]); setErr(''); setCondActiva(null) }
+  function clearAll() { setCart([]); setErr(''); setCondActiva(null); setEsDebito(false); setPagaCon(''); setVueltoReal('') }
 
   const subtotal = cart.reduce((s, i) => s + (i.articulo.precio_venta * i.cantidad), 0)
   const totalItems = cart.reduce((s, i) => s + i.cantidad, 0)
@@ -62,15 +66,26 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const cond = condiciones.find(c => c.id === condActiva)
   const descuentoMonto = cond ? subtotal * cond.descuento / 100 : 0
   const totalACobrar = subtotal - descuentoMonto
-  const comisionMonto = cond ? totalACobrar * cond.comision / 100 : 0
-  const netoEnCaja = totalACobrar - comisionMonto
+  // Comision: for transferencia, if esDebito, add the posnet comision on top
+  const comisionPct = cond ? cond.comision + (cond.tipo === 'transferencia' && esDebito ? cond.comision : 0) : 0
+  // Actually: comision from condicion is the posnet %. For transferencia+debito we use the comision field
+  const comisionReal = cond ? (cond.tipo === 'transferencia' && esDebito ? totalACobrar * cond.comision / 100 : (cond.tipo === 'tarjeta' ? totalACobrar * cond.comision / 100 : 0)) : 0
+  const netoEnCaja = totalACobrar - comisionReal
 
-  // Which billetera type receives the money
+  // Paga con logic
+  const pagaConNum = parseFloat(pagaCon) || 0
+  const vueltoSugerido = pagaConNum > 0 && cond?.tipo === 'efectivo' ? pagaConNum - totalACobrar : 0
+  const vueltoRealNum = vueltoReal !== '' ? parseFloat(vueltoReal) || 0 : vueltoSugerido
+  const entraEnCajaEfectivo = cond?.tipo === 'efectivo' && pagaConNum > 0 ? pagaConNum - vueltoRealNum : netoEnCaja
+
+  // Final amount that enters billetera
+  const montoFinalCaja = cond?.tipo === 'efectivo' && pagaConNum > 0 ? entraEnCajaEfectivo : netoEnCaja
+
   function getBilleteraTipo(): string {
     if (!cond) return 'efectivo'
     if (cond.tipo === 'efectivo') return 'efectivo'
-    if (cond.tipo === 'transferencia') return 'transferencia'
-    return 'tarjeta_debito' // tarjeta goes to T. Débito by default
+    if (cond.tipo === 'transferencia') return esDebito ? 'tarjeta_debito' : 'transferencia'
+    return 'tarjeta_credito'
   }
 
   async function procesarVenta() {
@@ -78,14 +93,19 @@ export default function VentasModule({ onVentaCompleta }: Props) {
     setProc(true); setErr('')
     try {
       const notas: string[] = []
-      notas.push(`Pago: ${cond.nombre}`)
+      notas.push(`Pago: ${cond.nombre}${esDebito ? ' (Débito)' : ''}`)
       if (cond.descuento > 0) notas.push(`Dto ${cond.descuento}%: -${formatCurrency(descuentoMonto)}`)
-      if (cond.comision > 0) notas.push(`Com. posnet ${cond.comision}%: -${formatCurrency(comisionMonto)}`)
-      notas.push(`Neto: ${formatCurrency(netoEnCaja)}`)
+      if (comisionReal > 0) notas.push(`Com. posnet: -${formatCurrency(comisionReal)}`)
+      if (cond.tipo === 'efectivo' && pagaConNum > 0) {
+        notas.push(`Paga con: ${formatCurrency(pagaConNum)}`)
+        notas.push(`Vuelto: ${formatCurrency(vueltoRealNum)}`)
+        if (Math.abs(entraEnCajaEfectivo - totalACobrar) > 0.5) notas.push(`Ajuste: ${formatCurrency(entraEnCajaEfectivo - totalACobrar)}`)
+      }
+      notas.push(`Neto caja: ${formatCurrency(montoFinalCaja)}`)
 
       const { data: venta, error: ve } = await supabase.from('ventas').insert([{
         total: totalACobrar, metodo_pago: getBilleteraTipo(), cuotas: 1,
-        nota: notas.join(' | '), comision: comisionMonto, neto: netoEnCaja
+        nota: notas.join(' | '), comision: comisionReal, neto: montoFinalCaja
       }]).select().single()
       if (ve) throw ve
 
@@ -96,12 +116,11 @@ export default function VentasModule({ onVentaCompleta }: Props) {
 
       for (const i of cart) await supabase.from('articulos').update({ cantidad: i.articulo.cantidad - i.cantidad }).eq('id', i.articulo.id)
 
-      // Billetera: entra el neto (total cobrado - comisión posnet)
       const billTipo = getBilleteraTipo()
       const { data: b } = await supabase.from('billetera').select('*').eq('tipo', billTipo).single()
-      if (b) await supabase.from('billetera').update({ saldo: b.saldo + netoEnCaja }).eq('id', b.id)
+      if (b) await supabase.from('billetera').update({ saldo: b.saldo + montoFinalCaja }).eq('id', b.id)
 
-      setOk(true); setCart([]); setCondActiva(null); load(); onVentaCompleta()
+      setOk(true); clearAll(); load(); onVentaCompleta()
       setTimeout(() => setOk(false), 3000)
     } catch (e: any) { setErr(e.message || 'Error') } finally { setProc(false) }
   }
@@ -113,7 +132,6 @@ export default function VentasModule({ onVentaCompleta }: Props) {
     if (tipo === 'transferencia') return <CreditCard size={18} className="text-blue-500" />
     return <Wallet size={18} className="text-purple-500" />
   }
-
   const condColor = (tipo: string, active: boolean) => {
     if (!active) return 'bg-white border-gray-200 hover:bg-gray-50'
     if (tipo === 'efectivo') return 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-200'
@@ -123,7 +141,6 @@ export default function VentasModule({ onVentaCompleta }: Props) {
 
   return (
     <div className="h-full flex flex-col lg:flex-row bg-botanical">
-      {/* Left: search & categories */}
       <div className="flex-1 p-4 lg:p-6 overflow-auto relative z-10">
         <div className="max-w-3xl mx-auto">
           <div className="mb-5"><h2 style={{ fontFamily: 'var(--font-display)' }} className="text-2xl font-semibold text-gray-900">Punto de Venta</h2><p className="text-sm text-gray-500 mt-1">Seleccioná una categoría o buscá artículos</p></div>
@@ -140,7 +157,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
         </div>
       </div>
 
-      {/* Right: cart */}
+      {/* Cart */}
       <div className="w-full lg:w-[420px] bg-white border-t lg:border-t-0 lg:border-l border-gray-100 flex flex-col relative z-10">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-2"><ShoppingCart size={16} className="text-gray-400" /><h3 className="text-sm font-semibold text-gray-700">Venta actual</h3>{totalItems > 0 && <span className="bg-kira-100 text-kira-700 text-xs font-semibold px-1.5 py-0.5 rounded-full">{totalItems}</span>}</div>
@@ -151,8 +168,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
             <div className="space-y-2">{cart.map((item, idx) => (<div key={item.articulo.id} className="flex items-center gap-3 p-3 bg-gray-50/80 rounded-lg animate-slide-in" style={{ animationDelay: `${idx * 50}ms` }}><div className="flex-1 min-w-0"><p className="text-sm font-medium text-gray-800 truncate">{item.articulo.descripcion}</p><p className="text-xs text-gray-400">{formatCurrency(item.articulo.precio_venta)} c/u</p></div><div className="flex items-center gap-1.5"><button onClick={() => updQty(item.articulo.id, -1)} disabled={item.cantidad <= 1} className="w-7 h-7 rounded-md border border-gray-200 flex items-center justify-center hover:bg-gray-100 disabled:opacity-30"><Minus size={12} /></button><span className="w-8 text-center text-sm font-semibold text-gray-700">{item.cantidad}</span><button onClick={() => updQty(item.articulo.id, 1)} disabled={item.cantidad >= item.articulo.cantidad} className="w-7 h-7 rounded-md border border-gray-200 flex items-center justify-center hover:bg-gray-100 disabled:opacity-30"><Plus size={12} /></button></div><p className="text-sm font-semibold text-gray-800 w-20 text-right">{formatCurrency(item.articulo.precio_venta * item.cantidad)}</p><button onClick={() => setCart(p => p.filter(i => i.articulo.id !== item.articulo.id))} className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button></div>))}</div>}
         </div>
         {cart.length > 0 && (
-          <div className="border-t border-gray-100 px-4 py-4 space-y-3 max-h-[60vh] overflow-auto">
-            {/* Subtotal */}
+          <div className="border-t border-gray-100 px-4 py-4 space-y-3 max-h-[65vh] overflow-auto">
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-500">Precio de lista ({totalItems} art.)</span>
               <span className="text-sm text-gray-700">{formatCurrency(subtotal)}</span>
@@ -163,9 +179,8 @@ export default function VentasModule({ onVentaCompleta }: Props) {
               <p className="text-xs text-gray-400 uppercase tracking-wider mb-2 font-medium">Condición de pago</p>
               <div className="grid grid-cols-3 gap-2">
                 {condiciones.map(c => (
-                  <button key={c.id} onClick={() => setCondActiva(condActiva === c.id ? null : c.id)}
-                    className={cn("flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl border transition-all",
-                      condColor(c.tipo, condActiva === c.id))}>
+                  <button key={c.id} onClick={() => { setCondActiva(condActiva === c.id ? null : c.id); setEsDebito(false); setPagaCon(''); setVueltoReal('') }}
+                    className={cn("flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl border transition-all", condColor(c.tipo, condActiva === c.id))}>
                     {condIcon(c.tipo)}
                     <span className="text-xs font-medium text-gray-700">{c.nombre}</span>
                     {c.descuento > 0 && <span className="text-[10px] text-emerald-600 font-semibold">-{c.descuento}%</span>}
@@ -177,33 +192,89 @@ export default function VentasModule({ onVentaCompleta }: Props) {
 
             {/* Breakdown */}
             {cond && (
-              <div className="space-y-1.5 animate-fade-in">
+              <div className="space-y-2 animate-fade-in">
                 {cond.descuento > 0 && (
                   <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-emerald-50 text-xs">
                     <span className="text-emerald-700">Descuento {cond.nombre} {cond.descuento}%</span>
                     <span className="font-semibold text-emerald-600">-{formatCurrency(descuentoMonto)}</span>
                   </div>
                 )}
+
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-gray-700">Total a cobrar</span>
                   <span style={{ fontFamily: 'var(--font-display)' }} className="text-2xl font-bold text-gray-900">{formatCurrency(totalACobrar)}</span>
                 </div>
-                {cond.comision > 0 && (
+
+                {/* Débito toggle for transferencia */}
+                {cond.tipo === 'transferencia' && (
+                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-blue-50/50 cursor-pointer">
+                    <input type="checkbox" checked={esDebito} onChange={e => setEsDebito(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-300 text-blue-500 focus:ring-blue-400" />
+                    <Wallet size={13} className="text-purple-500" />
+                    <span className="text-xs text-gray-600">Paga con tarjeta de débito</span>
+                    {esDebito && cond.comision > 0 && <span className="text-[10px] text-purple-500 ml-auto">Com. {cond.comision}%</span>}
+                  </label>
+                )}
+
+                {/* Comision posnet */}
+                {comisionReal > 0 && (
                   <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-purple-50 text-xs">
                     <span className="text-purple-700">Comisión posnet {cond.comision}%</span>
-                    <span className="font-semibold text-purple-600">-{formatCurrency(comisionMonto)}</span>
+                    <span className="font-semibold text-purple-600">-{formatCurrency(comisionReal)}</span>
                   </div>
                 )}
-                <div className="flex items-center justify-between px-2 py-1 text-xs">
-                  <span className="text-gray-500">Neto en caja</span>
-                  <span className="font-semibold text-gray-700">{formatCurrency(netoEnCaja)}</span>
+
+                {/* Paga con (solo efectivo) */}
+                {cond.tipo === 'efectivo' && (
+                  <div className="space-y-1.5 px-2 py-2 rounded-lg bg-gray-50">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500 w-20">Paga con</span>
+                      <div className="relative flex-1">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
+                        <input type="number" placeholder={totalACobrar.toString()} value={pagaCon}
+                          onChange={e => { setPagaCon(e.target.value); setVueltoReal('') }}
+                          className="w-full pl-5 pr-3 py-1.5 rounded-lg border border-gray-200 text-sm text-right focus:outline-none focus:ring-2 focus:ring-emerald-400/30" />
+                      </div>
+                    </div>
+                    {pagaConNum > 0 && vueltoSugerido > 0 && (
+                      <>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-500">Vuelto sugerido</span>
+                          <span className="font-semibold text-amber-600">{formatCurrency(vueltoSugerido)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-500 w-20">Vuelto real</span>
+                          <div className="relative flex-1">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
+                            <input type="number" placeholder={vueltoSugerido.toString()} value={vueltoReal}
+                              onChange={e => setVueltoReal(e.target.value)}
+                              className="w-full pl-5 pr-3 py-1.5 rounded-lg border border-gray-200 text-sm text-right focus:outline-none focus:ring-2 focus:ring-amber-400/30" />
+                          </div>
+                        </div>
+                        {vueltoReal !== '' && Math.abs(vueltoRealNum - vueltoSugerido) > 0.5 && (
+                          <div className={cn("flex items-center justify-between text-[10px] px-1",
+                            vueltoRealNum < vueltoSugerido ? "text-emerald-600" : "text-red-500")}>
+                            <span>{vueltoRealNum < vueltoSugerido ? 'Te quedás con' : 'Das de más'}</span>
+                            <span className="font-semibold">{formatCurrency(Math.abs(vueltoSugerido - vueltoRealNum))}</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {pagaConNum > 0 && pagaConNum < totalACobrar && (
+                      <div className="text-[10px] text-red-500 px-1">Falta cobrar {formatCurrency(totalACobrar - pagaConNum)}</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Neto en caja */}
+                <div className="flex items-center justify-between px-2 py-1.5 bg-gray-50 rounded-lg text-xs">
+                  <span className="text-gray-500 font-medium">Entra en caja</span>
+                  <span className="font-bold text-gray-800 text-sm">{formatCurrency(montoFinalCaja)}</span>
                 </div>
               </div>
             )}
 
-            {!cond && (
-              <div className="text-center py-2 text-xs text-amber-500">Seleccioná una condición de pago</div>
-            )}
+            {!cond && <div className="text-center py-2 text-xs text-amber-500">Seleccioná una condición de pago</div>}
 
             {err && <div className="flex items-center gap-2 p-2 bg-red-50 rounded-lg text-red-600 text-xs animate-fade-in"><AlertCircle size={14} />{err}</div>}
             <button onClick={procesarVenta} disabled={proc || !cond}

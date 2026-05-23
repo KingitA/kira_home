@@ -1,15 +1,14 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { supabase, Articulo, CarritoItem, MetodoPago, METODO_PAGO_LABELS, Posnet, PosnetComision } from '@/lib/supabase'
+import { supabase, Articulo, CarritoItem, CondicionPago } from '@/lib/supabase'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Search, Plus, Minus, Trash2, ShoppingCart, CreditCard, Banknote, CheckCircle2, AlertCircle, X, Package, ArrowLeft, Wallet } from 'lucide-react'
 
 interface Props { onVentaCompleta: () => void }
 
-// Category illustrations (compact)
 const Ill=(d:string)=>()=>(<svg viewBox="0 0 120 80" className="w-full h-full" fill="none" dangerouslySetInnerHTML={{__html:d}}/>)
-const IllCocina=Ill('<ellipse cx="60" cy="72" rx="50" ry="4" fill="currentColor" opacity="0.1"/><rect x="25" y="40" width="40" height="8" rx="4" fill="currentColor" opacity="0.25"/><rect x="25" y="35" width="40" height="10" rx="5" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.5"/><line x1="65" y1="40" x2="85" y2="35" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.4"/><path d="M35 30Q37 24 35 18" stroke="currentColor" stroke-width="1" opacity="0.2" fill="none"/><path d="M43 28Q45 22 43 16" stroke="currentColor" stroke-width="1" opacity="0.15" fill="none"/>')
+const IllCocina=Ill('<ellipse cx="60" cy="72" rx="50" ry="4" fill="currentColor" opacity="0.1"/><rect x="25" y="40" width="40" height="8" rx="4" fill="currentColor" opacity="0.25"/><rect x="25" y="35" width="40" height="10" rx="5" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.5"/><line x1="65" y1="40" x2="85" y2="35" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.4"/>')
 const IllVajilla=Ill('<ellipse cx="60" cy="72" rx="50" ry="4" fill="currentColor" opacity="0.1"/><path d="M30 30L30 55Q30 65 45 65L55 65Q70 65 70 55L70 30Z" stroke="currentColor" stroke-width="1.5" fill="currentColor" opacity="0.15"/><path d="M70 38Q82 38 82 48Q82 58 70 58" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.3"/>')
 const IllDeco=Ill('<ellipse cx="60" cy="72" rx="50" ry="4" fill="currentColor" opacity="0.1"/><path d="M45 70L48 45Q42 40 42 35Q42 28 50 28L60 28Q68 28 68 35Q68 40 62 45L65 70Z" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5"/><circle cx="50" cy="20" r="5" fill="currentColor" opacity="0.2"/><circle cx="60" cy="16" r="5" fill="currentColor" opacity="0.15"/>')
 const IllTextil=Ill('<ellipse cx="60" cy="72" rx="50" ry="4" fill="currentColor" opacity="0.1"/><rect x="15" y="30" width="35" height="28" rx="8" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5"/><path d="M60 65L60 35Q60 28 68 28L95 28Q102 28 102 35L102 65" stroke="currentColor" stroke-width="1.5" fill="currentColor" opacity="0.1"/>')
@@ -25,8 +24,6 @@ const CATS=[
   {id:'baño',nombre:'Baño',kw:['baño','jabonera','cesto de basura','portacepillo'],bg:'bg-cyan-50 border-cyan-200',t:'text-cyan-800',a:'text-cyan-600',I:IllBano},
 ]
 
-interface PagoLine { metodo: MetodoPago; monto: string; cuotas: number; posnetId: number | null }
-
 export default function VentasModule({ onVentaCompleta }: Props) {
   const [arts, setArts] = useState<Articulo[]>([])
   const [search, setSearch] = useState('')
@@ -36,21 +33,16 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const [ok, setOk] = useState(false)
   const [err, setErr] = useState('')
   const [catAct, setCatAct] = useState<string | null>(null)
-  const [dtoEfectivo, setDtoEfectivo] = useState(false)
-  const [dtoTransf, setDtoTransf] = useState(false)
-  const [pagos, setPagos] = useState<PagoLine[]>([{ metodo: 'efectivo', monto: '', cuotas: 1, posnetId: null }])
-  const [posnets, setPosnets] = useState<Posnet[]>([])
-  const [posComs, setPosComs] = useState<PosnetComision[]>([])
+  const [condiciones, setCondiciones] = useState<CondicionPago[]>([])
+  const [condActiva, setCondActiva] = useState<number | null>(null)
   const ref = useRef<HTMLInputElement>(null)
 
   useEffect(() => { load() }, [])
   async function load() {
     const { data: a } = await supabase.from('articulos').select('*').eq('activo', true).gt('cantidad', 0).order('descripcion')
     if (a) setArts(a)
-    const { data: p } = await supabase.from('posnets').select('*').eq('activo', true).order('nombre')
-    if (p) setPosnets(p)
-    const { data: pc } = await supabase.from('posnet_comisiones').select('*').eq('activo', true)
-    if (pc) setPosComs(pc)
+    const { data: c } = await supabase.from('condiciones_pago').select('*').eq('activo', true).order('id')
+    if (c) setCondiciones(c)
   }
 
   useEffect(() => {
@@ -62,113 +54,72 @@ export default function VentasModule({ onVentaCompleta }: Props) {
 
   function addToCart(a: Articulo) { setCart(p => { const e = p.find(i => i.articulo.id === a.id); if (e) { if (e.cantidad >= a.cantidad) { setErr(`Stock máx: ${a.cantidad}`); setTimeout(() => setErr(''), 2500); return p } return p.map(i => i.articulo.id === a.id ? { ...i, cantidad: i.cantidad + 1 } : i) } return [...p, { articulo: a, cantidad: 1 }] }); setSearch(''); if (!catAct) setResults([]) }
   function updQty(id: number, d: number) { setCart(p => p.map(i => { if (i.articulo.id !== id) return i; const q = i.cantidad + d; if (q <= 0 || q > i.articulo.cantidad) return i; return { ...i, cantidad: q } })) }
-  function clearAll() { setCart([]); setPagos([{ metodo: 'efectivo', monto: '', cuotas: 1, posnetId: null }]); setErr(''); setDtoEfectivo(false); setDtoTransf(false) }
+  function clearAll() { setCart([]); setErr(''); setCondActiva(null) }
 
   const subtotal = cart.reduce((s, i) => s + (i.articulo.precio_venta * i.cantidad), 0)
-  const dtoMonto = dtoEfectivo ? subtotal * 0.10 : dtoTransf ? subtotal * 0.05 : 0
-  const total = subtotal - dtoMonto
   const totalItems = cart.reduce((s, i) => s + i.cantidad, 0)
-  const totalPagado = pagos.reduce((s, p) => s + (parseFloat(p.monto) || 0), 0)
 
-  function addPago() { setPagos(p => [...p, { metodo: 'transferencia', monto: '', cuotas: 1, posnetId: null }]) }
-  function rmPago(i: number) { setPagos(p => p.filter((_, j) => j !== i)) }
-  function updPago(i: number, f: string, v: any) { setPagos(p => p.map((x, j) => j === i ? { ...x, [f]: v } : x)) }
-  function setTodo(i: number) { const o = pagos.reduce((s, p, j) => j === i ? s : s + (parseFloat(p.monto) || 0), 0); updPago(i, 'monto', (totalConRecargo - o).toString()) }
+  const cond = condiciones.find(c => c.id === condActiva)
+  const descuentoMonto = cond ? subtotal * cond.descuento / 100 : 0
+  const totalACobrar = subtotal - descuentoMonto
+  const comisionMonto = cond ? totalACobrar * cond.comision / 100 : 0
+  const netoEnCaja = totalACobrar - comisionMonto
 
-  const isTarjeta = (m: MetodoPago) => m === 'tarjeta_debito' || m === 'tarjeta_credito'
-
-  // Core lookup — accepts direct params so it can be called BEFORE state updates
-  function getInfoRaw(posnetId: number | null, tipo: 'debito' | 'credito', cuotas: number): { pct: number; recargo: number } {
-    if (!posnetId) return { pct: 0, recargo: 0 }
-    const comps = posComs.filter(pc => pc.posnet_id === posnetId && pc.tipo === tipo)
-    if (tipo === 'credito' && cuotas > 1) {
-      const exact = comps.find(pc => pc.cuotas === cuotas)
-      if (exact) return { pct: exact.porcentaje, recargo: exact.recargo ?? 0 }
-    }
-    const base = comps.find(pc => pc.cuotas === 1) || comps[0]
-    return { pct: base?.porcentaje ?? 0, recargo: base?.recargo ?? 0 }
+  // Which billetera type receives the money
+  function getBilleteraTipo(): string {
+    if (!cond) return 'efectivo'
+    if (cond.tipo === 'efectivo') return 'efectivo'
+    if (cond.tipo === 'transferencia') return 'transferencia'
+    return 'tarjeta_debito' // tarjeta goes to T. Débito by default
   }
-
-  function getPosnetInfo(p: PagoLine): { pct: number; recargo: number } {
-    const tipo = p.metodo === 'tarjeta_debito' ? 'debito' : 'credito'
-    return getInfoRaw(p.posnetId, tipo, p.cuotas)
-  }
-
-  // Compute the correct monto for a single pago given prospective config
-  function calcMonto(posnetId: number | null, metodo: MetodoPago, cuotas: number, orderTotal: number): string {
-    if (!isTarjeta(metodo) || !posnetId) return orderTotal.toFixed(2)
-    const tipo = metodo === 'tarjeta_debito' ? 'debito' : 'credito'
-    const { recargo } = getInfoRaw(posnetId, tipo, cuotas)
-    return (orderTotal + orderTotal * recargo / 100).toFixed(2)
-  }
-
-  // Calculate recargo on the total (increases what the client pays)
-  const totalRecargo = pagos.reduce((s, p) => {
-    const { recargo } = getPosnetInfo(p)
-    if (recargo <= 0) return s
-    return s + (total * recargo / 100)
-  }, 0)
-
-  const totalConRecargo = total + totalRecargo
-  const ajuste = totalPagado - totalConRecargo
-
-  // Commission is calculated on the amount WITH recargo
-  const totalComision = pagos.reduce((s, p) => {
-    const m = parseFloat(p.monto) || 0
-    const { pct } = getPosnetInfo(p)
-    return s + (m * pct / 100)
-  }, 0)
-  const netoReal = totalPagado - totalComision
 
   async function procesarVenta() {
-    if (cart.length === 0 || totalPagado <= 0) { setErr('Ingresá el monto'); return }
+    if (cart.length === 0 || !cond) { setErr('Seleccioná una condición de pago'); return }
     setProc(true); setErr('')
     try {
-      const main = pagos.reduce((a, b) => (parseFloat(b.monto) || 0) > (parseFloat(a.monto) || 0) ? b : a)
       const notas: string[] = []
-      if (pagos.length > 1) {
-        notas.push('Pago: ' + pagos.filter(p => parseFloat(p.monto) > 0).map(p => {
-          let s = `${METODO_PAGO_LABELS[p.metodo]} ${formatCurrency(parseFloat(p.monto) || 0)}`
-          if (isTarjeta(p.metodo) && p.posnetId) { const pn = posnets.find(x => x.id === p.posnetId); if (pn) s += ` (${pn.nombre})` }
-          if (p.metodo === 'tarjeta_credito' && p.cuotas > 1) s += ` ${p.cuotas}c`
-          return s
-        }).join(' + '))
-      } else {
-        if (isTarjeta(main.metodo) && main.posnetId) { const pn = posnets.find(x => x.id === main.posnetId); if (pn) notas.push(`Posnet: ${pn.nombre}`) }
-        if (main.metodo === 'tarjeta_credito' && main.cuotas > 1) notas.push(`${main.cuotas} cuotas`)
-      }
-      if (dtoEfectivo) notas.push(`Dto contado 10%: -${formatCurrency(dtoMonto)}`)
-      if (dtoTransf) notas.push(`Dto transf 5%: -${formatCurrency(dtoMonto)}`)
-      if (totalRecargo > 0) notas.push(`Recargo financiero ${pagos.map(p => { const { recargo } = getPosnetInfo(p); return recargo > 0 ? `${recargo}%` : null }).filter(Boolean).join('+')}: +${formatCurrency(totalRecargo)}`)
-      if (totalComision > 0) notas.push(`Comisión posnet: -${formatCurrency(totalComision)}`)
-      if (ajuste !== 0) notas.push(`Ajuste: ${formatCurrency(ajuste)}`)
+      notas.push(`Pago: ${cond.nombre}`)
+      if (cond.descuento > 0) notas.push(`Dto ${cond.descuento}%: -${formatCurrency(descuentoMonto)}`)
+      if (cond.comision > 0) notas.push(`Com. posnet ${cond.comision}%: -${formatCurrency(comisionMonto)}`)
+      notas.push(`Neto: ${formatCurrency(netoEnCaja)}`)
 
       const { data: venta, error: ve } = await supabase.from('ventas').insert([{
-        total: totalConRecargo, metodo_pago: main.metodo, cuotas: main.metodo === 'tarjeta_credito' ? main.cuotas : 1,
-        nota: notas.length > 0 ? notas.join(' | ') : null, comision: totalComision, neto: netoReal,
-        posnet_id: main.posnetId
+        total: totalACobrar, metodo_pago: getBilleteraTipo(), cuotas: 1,
+        nota: notas.join(' | '), comision: comisionMonto, neto: netoEnCaja
       }]).select().single()
       if (ve) throw ve
 
-      await supabase.from('venta_items').insert(cart.map(i => ({ venta_id: venta.id, articulo_id: i.articulo.id, cantidad: i.cantidad, precio_unitario: i.articulo.precio_venta, subtotal: i.articulo.precio_venta * i.cantidad })))
+      await supabase.from('venta_items').insert(cart.map(i => ({
+        venta_id: venta.id, articulo_id: i.articulo.id, cantidad: i.cantidad,
+        precio_unitario: i.articulo.precio_venta, subtotal: i.articulo.precio_venta * i.cantidad
+      })))
+
       for (const i of cart) await supabase.from('articulos').update({ cantidad: i.articulo.cantidad - i.cantidad }).eq('id', i.articulo.id)
 
-      // Billetera: efectivo y transferencia entran al 100%, tarjeta entra neto (menos comision posnet)
-      for (const p of pagos) {
-        const m = parseFloat(p.monto) || 0; if (m <= 0) continue
-        const pct = isTarjeta(p.metodo) ? getPosnetInfo(p).pct : 0
-        const neto = m - (m * pct / 100)
-        const { data: b } = await supabase.from('billetera').select('*').eq('tipo', p.metodo).single()
-        if (b) await supabase.from('billetera').update({ saldo: b.saldo + neto }).eq('id', b.id)
-      }
+      // Billetera: entra el neto (total cobrado - comisión posnet)
+      const billTipo = getBilleteraTipo()
+      const { data: b } = await supabase.from('billetera').select('*').eq('tipo', billTipo).single()
+      if (b) await supabase.from('billetera').update({ saldo: b.saldo + netoEnCaja }).eq('id', b.id)
 
-      setOk(true); setCart([]); setPagos([{ metodo: 'efectivo', monto: '', cuotas: 1, posnetId: null }])
-      setDtoEfectivo(false); setDtoTransf(false); load(); onVentaCompleta()
+      setOk(true); setCart([]); setCondActiva(null); load(); onVentaCompleta()
       setTimeout(() => setOk(false), 3000)
     } catch (e: any) { setErr(e.message || 'Error') } finally { setProc(false) }
   }
 
   const cntCat = (c: typeof CATS[0]) => arts.filter(a => { const d = a.descripcion.toLowerCase(), n = (a.nota || '').toLowerCase(); return c.kw.some(k => d.includes(k) || n.includes(k)) }).length
+
+  const condIcon = (tipo: string) => {
+    if (tipo === 'efectivo') return <Banknote size={18} className="text-emerald-500" />
+    if (tipo === 'transferencia') return <CreditCard size={18} className="text-blue-500" />
+    return <Wallet size={18} className="text-purple-500" />
+  }
+
+  const condColor = (tipo: string, active: boolean) => {
+    if (!active) return 'bg-white border-gray-200 hover:bg-gray-50'
+    if (tipo === 'efectivo') return 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-200'
+    if (tipo === 'transferencia') return 'bg-blue-50 border-blue-300 ring-2 ring-blue-200'
+    return 'bg-purple-50 border-purple-300 ring-2 ring-purple-200'
+  }
 
   return (
     <div className="h-full flex flex-col lg:flex-row bg-botanical">
@@ -201,126 +152,64 @@ export default function VentasModule({ onVentaCompleta }: Props) {
         </div>
         {cart.length > 0 && (
           <div className="border-t border-gray-100 px-4 py-4 space-y-3 max-h-[60vh] overflow-auto">
-            <div className="flex items-center justify-between"><span className="text-sm text-gray-500">Subtotal ({totalItems} art.)</span><span className="text-sm text-gray-700">{formatCurrency(subtotal)}</span></div>
-
-            {/* Descuentos: solo reducen el precio, sin comisión */}
-            <div className="flex gap-3">
-              <label className="flex items-center gap-1.5 cursor-pointer group flex-1">
-                <input type="checkbox" checked={dtoEfectivo} onChange={e => { setDtoEfectivo(e.target.checked); if (e.target.checked) { setDtoTransf(false); if (pagos.length === 1) { updPago(0, 'metodo', 'efectivo'); updPago(0, 'monto', (subtotal * 0.9).toString()) } } }} className="w-4 h-4 rounded border-gray-300 text-emerald-500 focus:ring-emerald-400" />
-                <Banknote size={12} className="text-emerald-500" /><span className="text-[11px] text-gray-600">Dto. efectivo 10%</span>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer group flex-1">
-                <input type="checkbox" checked={dtoTransf} onChange={e => { setDtoTransf(e.target.checked); if (e.target.checked) { setDtoEfectivo(false); if (pagos.length === 1) { updPago(0, 'metodo', 'transferencia'); updPago(0, 'monto', (subtotal * 0.95).toString()) } } }} className="w-4 h-4 rounded border-gray-300 text-blue-500 focus:ring-blue-400" />
-                <CreditCard size={12} className="text-blue-500" /><span className="text-[11px] text-gray-600">Dto. transf. 5%</span>
-              </label>
+            {/* Subtotal */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-500">Precio de lista ({totalItems} art.)</span>
+              <span className="text-sm text-gray-700">{formatCurrency(subtotal)}</span>
             </div>
-            {(dtoEfectivo || dtoTransf) && <div className="flex items-center justify-between"><span className="text-xs text-gray-400">{dtoEfectivo ? 'Descuento efectivo 10%' : 'Descuento transferencia 5%'}</span><span className="text-xs font-semibold text-emerald-600">-{formatCurrency(dtoMonto)}</span></div>}
 
-            <div className="flex items-center justify-between"><span className="text-sm font-medium text-gray-700">Total a cobrar</span><span style={{ fontFamily: 'var(--font-display)' }} className="text-2xl font-bold text-gray-900">{formatCurrency(totalConRecargo)}</span></div>
-            {totalRecargo > 0 && <div className="flex items-center justify-between"><span className="text-xs text-orange-500">Incluye recargo financiero</span><span className="text-xs font-semibold text-orange-600">+{formatCurrency(totalRecargo)}</span></div>}
-
-            {/* Pagos */}
+            {/* Condiciones de pago */}
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs text-gray-400 uppercase tracking-wider font-medium">Forma de pago</p>
-                {pagos.length < 4 && <button onClick={addPago} className="text-[10px] text-kira-600 hover:underline flex items-center gap-0.5"><Plus size={10} />Agregar</button>}
+              <p className="text-xs text-gray-400 uppercase tracking-wider mb-2 font-medium">Condición de pago</p>
+              <div className="grid grid-cols-3 gap-2">
+                {condiciones.map(c => (
+                  <button key={c.id} onClick={() => setCondActiva(condActiva === c.id ? null : c.id)}
+                    className={cn("flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl border transition-all",
+                      condColor(c.tipo, condActiva === c.id))}>
+                    {condIcon(c.tipo)}
+                    <span className="text-xs font-medium text-gray-700">{c.nombre}</span>
+                    {c.descuento > 0 && <span className="text-[10px] text-emerald-600 font-semibold">-{c.descuento}%</span>}
+                    {c.comision > 0 && <span className="text-[10px] text-purple-500">Com. {c.comision}%</span>}
+                  </button>
+                ))}
               </div>
-              <div className="space-y-2">
-                {pagos.map((p, idx) => {
-                  const mNum = parseFloat(p.monto) || 0
-                  return (
-                    <div key={idx} className="space-y-1.5 pb-2 border-b border-gray-50 last:border-0">
-                      <div className="flex items-center gap-2">
-                        <select value={p.metodo} onChange={e => { updPago(idx, 'metodo', e.target.value); if (!isTarjeta(e.target.value as MetodoPago)) updPago(idx, 'posnetId', null) }}
-                          className="w-32 px-2 py-2 text-xs border border-gray-200 rounded-lg">
-                          <option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option>
-                          <option value="tarjeta_debito">T. Débito</option><option value="tarjeta_credito">T. Crédito</option>
-                        </select>
-                        <div className="relative flex-1"><span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
-                          <input type="number" placeholder="0" value={p.monto} onChange={e => updPago(idx, 'monto', e.target.value)}
-                            className="w-full pl-6 pr-3 py-2 rounded-lg border border-gray-200 text-sm text-right focus:outline-none focus:ring-2 focus:ring-kira-400/30" />
-                        </div>
-                        {pagos.length === 1 ? <button onClick={() => setTodo(0)} className="text-[10px] text-emerald-600 hover:underline whitespace-nowrap">Todo</button>
-                          : <button onClick={() => rmPago(idx)} className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400"><X size={14} /></button>}
-                      </div>
-                      {/* Posnet for tarjeta */}
-                      {isTarjeta(p.metodo) && posnets.length > 0 && (
-                        <div className="flex items-center gap-2 ml-1">
-                          <span className="text-[10px] text-gray-400">Posnet:</span>
-                          {posnets.map(pos => (
-                            <button key={pos.id} onClick={() => {
-                              const newId = p.posnetId === pos.id ? null : pos.id
-                              setPagos(prev => prev.map((x, j) => j !== idx ? x : {
-                                ...x,
-                                posnetId: newId,
-                                monto: calcMonto(newId, x.metodo, x.cuotas, total)
-                              }))
-                            }}
-                              className={cn("px-2 py-0.5 rounded text-[10px] font-medium transition-colors border",
-                                p.posnetId === pos.id ? "bg-purple-100 text-purple-700 border-purple-200" : "bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100")}>
-                              {pos.nombre}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {/* Cuotas for credito */}
-                      {p.metodo === 'tarjeta_credito' && (
-                        <div className="flex items-center gap-2 ml-1">
-                          <span className="text-[10px] text-gray-400">Cuotas:</span>
-                          {[1, 3, 6, 12].map(c => (
-                            <button key={c} onClick={() => {
-                              setPagos(prev => prev.map((x, j) => j !== idx ? x : {
-                                ...x,
-                                cuotas: c,
-                                monto: calcMonto(x.posnetId, x.metodo, c, total)
-                              }))
-                            }}
-                              className={cn("px-2 py-0.5 rounded text-[10px] font-medium border",
-                                p.cuotas === c ? "bg-pink-100 text-pink-700 border-pink-200" : "bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100")}>
-                              {c}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {/* Commission and recargo inline */}
-                      {isTarjeta(p.metodo) && p.posnetId && mNum > 0 && (() => {
-                        const { pct: comPct, recargo: recPct } = getPosnetInfo(p)
-                        const comMonto = mNum * comPct / 100
-                        if (comPct === 0 && recPct === 0) return null
-                        return (
-                          <div className="ml-1 space-y-0.5">
-                            {recPct > 0 && <div className="flex items-center justify-between text-[10px]"><span className="text-orange-500">Recargo al cliente {recPct}%</span><span className="text-orange-600 font-semibold">+{formatCurrency(total * recPct / 100)}</span></div>}
-                            {comPct > 0 && <div className="flex items-center justify-between text-[10px]"><span className="text-purple-500">Comisión {posnets.find(x => x.id === p.posnetId)?.nombre} {comPct}%</span><span className="text-purple-600 font-semibold">-{formatCurrency(comMonto)} → Neto: {formatCurrency(mNum - comMonto)}</span></div>}
-                          </div>
-                        )
-                      })()}
-                    </div>
-                  )
-                })}
-              </div>
-
-              {totalPagado > 0 && ajuste !== 0 && (
-                <div className={cn("flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg text-xs", ajuste > 0 ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-600")}>
-                  <span>{ajuste > 0 ? 'Vuelto / Ajuste' : 'Falta cobrar'}</span><span className="font-semibold">{formatCurrency(Math.abs(ajuste))}</span>
-                </div>
-              )}
-              {totalComision > 0 && (
-                <div className="flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg text-xs bg-purple-50 text-purple-700">
-                  <span>Comisión posnet total</span><span className="font-semibold">-{formatCurrency(totalComision)}</span>
-                </div>
-              )}
-              {totalComision > 0 && (
-                <div className="flex items-center justify-between px-2 py-1 text-xs text-gray-500">
-                  <span>Neto real en caja</span><span className="font-semibold text-gray-700">{formatCurrency(netoReal)}</span>
-                </div>
-              )}
             </div>
+
+            {/* Breakdown */}
+            {cond && (
+              <div className="space-y-1.5 animate-fade-in">
+                {cond.descuento > 0 && (
+                  <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-emerald-50 text-xs">
+                    <span className="text-emerald-700">Descuento {cond.nombre} {cond.descuento}%</span>
+                    <span className="font-semibold text-emerald-600">-{formatCurrency(descuentoMonto)}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">Total a cobrar</span>
+                  <span style={{ fontFamily: 'var(--font-display)' }} className="text-2xl font-bold text-gray-900">{formatCurrency(totalACobrar)}</span>
+                </div>
+                {cond.comision > 0 && (
+                  <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-purple-50 text-xs">
+                    <span className="text-purple-700">Comisión posnet {cond.comision}%</span>
+                    <span className="font-semibold text-purple-600">-{formatCurrency(comisionMonto)}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between px-2 py-1 text-xs">
+                  <span className="text-gray-500">Neto en caja</span>
+                  <span className="font-semibold text-gray-700">{formatCurrency(netoEnCaja)}</span>
+                </div>
+              </div>
+            )}
+
+            {!cond && (
+              <div className="text-center py-2 text-xs text-amber-500">Seleccioná una condición de pago</div>
+            )}
 
             {err && <div className="flex items-center gap-2 p-2 bg-red-50 rounded-lg text-red-600 text-xs animate-fade-in"><AlertCircle size={14} />{err}</div>}
-            <button onClick={procesarVenta} disabled={proc || totalPagado <= 0}
+            <button onClick={procesarVenta} disabled={proc || !cond}
               className={cn("w-full py-3 rounded-xl text-white font-semibold text-sm transition-all flex items-center justify-center gap-2",
-                proc || totalPagado <= 0 ? "bg-gray-400 cursor-not-allowed" : "bg-kira-500 hover:bg-kira-600 active:scale-[0.98] shadow-md shadow-kira-500/20")}>
-              {proc ? 'Procesando...' : <><CheckCircle2 size={16} />Cerrar Venta — {formatCurrency(totalConRecargo)}</>}
+                proc || !cond ? "bg-gray-400 cursor-not-allowed" : "bg-kira-500 hover:bg-kira-600 active:scale-[0.98] shadow-md shadow-kira-500/20")}>
+              {proc ? 'Procesando...' : <><CheckCircle2 size={16} />Cerrar Venta{cond ? ` — ${formatCurrency(totalACobrar)}` : ''}</>}
             </button>
           </div>
         )}

@@ -1,29 +1,25 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { supabase, Billetera, Posnet, PosnetComision, MetodoPago } from '@/lib/supabase'
+import { supabase, Billetera, CondicionPago, MetodoPago } from '@/lib/supabase'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Wallet, ArrowRightLeft, X, Plus, Trash2 } from 'lucide-react'
+import { Wallet, ArrowRightLeft, X, Pencil, Save, CreditCard, Banknote } from 'lucide-react'
 
 interface Props { billetera: Billetera[]; onUpdate: () => void }
 
 export default function CajaPanel({ billetera, onUpdate }: Props) {
   const [showMov, setShowMov] = useState(false)
   const [movForm, setMovForm] = useState({ desde: 'efectivo', hacia: 'transferencia', monto: '', nota: '' })
-  const [posnets, setPosnets] = useState<Posnet[]>([])
-  const [posnetComs, setPosnetComs] = useState<PosnetComision[]>([])
-  const [showPosnets, setShowPosnets] = useState(false)
-  const [newPosnet, setNewPosnet] = useState('')
-  const [editPosnetId, setEditPosnetId] = useState<number | null>(null)
-  const [pcForm, setPcForm] = useState({ tipo: 'debito' as 'debito' | 'credito', cuotas: '1', porcentaje: '', recargo: '0', descripcion: '' })
+  const [condiciones, setCondiciones] = useState<CondicionPago[]>([])
+  const [showCond, setShowCond] = useState(false)
+  const [editId, setEditId] = useState<number | null>(null)
+  const [editForm, setEditForm] = useState({ descuento: '', comision: '' })
 
-  useEffect(() => { fetchPosnets() }, [])
+  useEffect(() => { fetchCondiciones() }, [])
 
-  async function fetchPosnets() {
-    const { data: p } = await supabase.from('posnets').select('*').eq('activo', true).order('nombre')
-    if (p) setPosnets(p)
-    const { data: pc } = await supabase.from('posnet_comisiones').select('*').eq('activo', true)
-    if (pc) setPosnetComs(pc)
+  async function fetchCondiciones() {
+    const { data } = await supabase.from('condiciones_pago').select('*').eq('activo', true).order('id')
+    if (data) setCondiciones(data)
   }
 
   async function hacerMovimiento() {
@@ -41,15 +37,20 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
     onUpdate()
   }
 
-  async function addPosnet() { if (!newPosnet) return; await supabase.from('posnets').insert([{ nombre: newPosnet }]); setNewPosnet(''); fetchPosnets() }
-  async function deletePosnet(id: number) { await supabase.from('posnets').update({ activo: false }).eq('id', id); fetchPosnets() }
-  async function addPosnetCom() {
-    if (!editPosnetId) return
-    await supabase.from('posnet_comisiones').insert([{ posnet_id: editPosnetId, tipo: pcForm.tipo, cuotas: parseInt(pcForm.cuotas) || 1, porcentaje: parseFloat(pcForm.porcentaje) || 0, recargo: parseFloat(pcForm.recargo) || 0, descripcion: pcForm.descripcion || null }])
-    setPcForm({ tipo: 'debito', cuotas: '1', porcentaje: '', recargo: '0', descripcion: '' })
-    fetchPosnets()
+  function startEdit(c: CondicionPago) {
+    setEditId(c.id)
+    setEditForm({ descuento: c.descuento.toString(), comision: c.comision.toString() })
   }
-  async function deletePosnetCom(id: number) { await supabase.from('posnet_comisiones').update({ activo: false }).eq('id', id); fetchPosnets() }
+
+  async function saveEdit() {
+    if (!editId) return
+    await supabase.from('condiciones_pago').update({
+      descuento: parseFloat(editForm.descuento) || 0,
+      comision: parseFloat(editForm.comision) || 0,
+    }).eq('id', editId)
+    setEditId(null)
+    fetchCondiciones()
+  }
 
   const efectivo = billetera.find(b => b.tipo === 'efectivo')?.saldo ?? 0
   const transferencia = billetera.find(b => b.tipo === 'transferencia')?.saldo ?? 0
@@ -57,12 +58,18 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
   const tcredito = billetera.find(b => b.tipo === 'tarjeta_credito')?.saldo ?? 0
   const banco = transferencia + tdebito + tcredito
 
-  const tipos: { key: MetodoPago; label: string; color: string }[] = [
-    { key: 'efectivo', label: 'Efectivo', color: 'text-emerald-400' },
-    { key: 'transferencia', label: 'Transferencia', color: 'text-blue-400' },
-    { key: 'tarjeta_debito', label: 'T. Débito', color: 'text-purple-400' },
-    { key: 'tarjeta_credito', label: 'T. Crédito', color: 'text-pink-400' },
+  const tipos: { key: MetodoPago; label: string }[] = [
+    { key: 'efectivo', label: 'Efectivo' },
+    { key: 'transferencia', label: 'Transferencia' },
+    { key: 'tarjeta_debito', label: 'T. Débito' },
+    { key: 'tarjeta_credito', label: 'T. Crédito' },
   ]
+
+  const condIcono = (tipo: string) => {
+    if (tipo === 'efectivo') return <Banknote size={12} className="text-emerald-400" />
+    if (tipo === 'transferencia') return <CreditCard size={12} className="text-blue-400" />
+    return <Wallet size={12} className="text-purple-400" />
+  }
 
   return (
     <div className="px-4 py-4 border-t border-white/10">
@@ -129,75 +136,51 @@ export default function CajaPanel({ billetera, onUpdate }: Props) {
         </div>
       </div>
 
-      {/* Posnets */}
+      {/* Condiciones de pago */}
       <div className="mt-3">
-        <button onClick={() => setShowPosnets(!showPosnets)}
+        <button onClick={() => { setShowCond(!showCond); if (!showCond) fetchCondiciones() }}
           className={cn("w-full flex items-center justify-between text-[10px] px-2 py-1.5 rounded transition-colors",
-            showPosnets ? "bg-purple-500/10 text-purple-300" : "text-white/30 hover:text-white/50 hover:bg-white/5")}>
-          <span className="flex items-center gap-1"><Wallet size={10} /> Posnets y comisiones</span>
-          <span>{posnets.length}</span>
+            showCond ? "bg-kira-400/10 text-kira-300" : "text-white/30 hover:text-white/50 hover:bg-white/5")}>
+          <span className="flex items-center gap-1"><Wallet size={10} /> Condiciones de pago</span>
         </button>
-        {showPosnets && (
+        {showCond && (
           <div className="mt-2 p-2.5 bg-white/5 rounded-lg space-y-2 animate-fade-in">
-            {posnets.map(pos => (
-              <div key={pos.id} className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <button onClick={() => setEditPosnetId(editPosnetId === pos.id ? null : pos.id)}
-                    className={cn("text-[11px] font-semibold", editPosnetId === pos.id ? "text-purple-300" : "text-white/70 hover:text-white")}>
-                    {pos.nombre}
-                  </button>
-                  <button onClick={() => deletePosnet(pos.id)} className="p-0.5 hover:bg-white/10 rounded">
-                    <Trash2 size={9} className="text-white/20 hover:text-red-400" />
-                  </button>
+            {condiciones.map(c => (
+              <div key={c.id} className="bg-white/5 rounded px-2.5 py-2">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1.5">
+                    {condIcono(c.tipo)}
+                    <span className="text-[11px] font-semibold text-white/80">{c.nombre}</span>
+                  </div>
+                  {editId === c.id ? (
+                    <button onClick={saveEdit} className="p-0.5 hover:bg-white/10 rounded"><Save size={10} className="text-emerald-400" /></button>
+                  ) : (
+                    <button onClick={() => startEdit(c)} className="p-0.5 hover:bg-white/10 rounded"><Pencil size={9} className="text-white/30 hover:text-white/60" /></button>
+                  )}
                 </div>
-                {editPosnetId === pos.id && (
-                  <div className="pl-2 space-y-1 animate-fade-in">
-                    {posnetComs.filter(pc => pc.posnet_id === pos.id).map(pc => (
-                      <div key={pc.id} className="flex items-center justify-between bg-white/5 rounded px-2 py-1">
-                        <span className="text-[10px] text-white/60">
-                          {pc.tipo === 'debito' ? 'Débito' : 'Crédito'}{pc.cuotas > 1 ? ` ${pc.cuotas}c` : ''}:
-                          <span className="text-white/80 font-semibold ml-1">{pc.porcentaje}% com.</span>
-                          {(pc.recargo ?? 0) > 0 && <span className="text-orange-400 ml-1">+{pc.recargo}% recargo</span>}
-                          {pc.descripcion && <span className="text-white/40 ml-1">· {pc.descripcion}</span>}
-                        </span>
-                        <button onClick={() => deletePosnetCom(pc.id)} className="p-0.5">
-                          <Trash2 size={8} className="text-white/20 hover:text-red-400" />
-                        </button>
-                      </div>
-                    ))}
-                    <div className="flex gap-1 mt-1">
-                      <select value={pcForm.tipo} onChange={e => setPcForm(f => ({ ...f, tipo: e.target.value as any }))}
-                        className="bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 w-16">
-                        <option value="debito" className="text-black">Débito</option>
-                        <option value="credito" className="text-black">Crédito</option>
-                      </select>
-                      {pcForm.tipo === 'credito' && (
-                        <input type="number" placeholder="Cuotas" value={pcForm.cuotas}
-                          onChange={e => setPcForm(f => ({ ...f, cuotas: e.target.value }))}
-                          className="w-12 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20" />
-                      )}
-                      <input type="number" placeholder="% com" value={pcForm.porcentaje}
-                        onChange={e => setPcForm(f => ({ ...f, porcentaje: e.target.value }))}
-                        className="w-12 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20" />
-                      <input type="number" placeholder="% rec" value={pcForm.recargo}
-                        onChange={e => setPcForm(f => ({ ...f, recargo: e.target.value }))}
-                        className="w-12 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20" />
-                      <input placeholder="Desc." value={pcForm.descripcion}
-                        onChange={e => setPcForm(f => ({ ...f, descripcion: e.target.value }))}
-                        className="flex-1 bg-white/10 text-white text-[10px] rounded px-1.5 py-1 border-0 placeholder:text-white/20" />
-                      <button onClick={addPosnetCom} className="px-1.5 py-1 bg-purple-500 text-white text-[9px] rounded hover:bg-purple-600">
-                        <Plus size={10} />
-                      </button>
+                {editId === c.id ? (
+                  <div className="flex gap-2 mt-1">
+                    <div className="flex-1">
+                      <span className="text-[9px] text-white/30">Dto %</span>
+                      <input type="number" value={editForm.descuento} onChange={e => setEditForm(f => ({ ...f, descuento: e.target.value }))}
+                        className="w-full bg-white/10 text-white text-[11px] rounded px-2 py-1 border-0" />
                     </div>
+                    <div className="flex-1">
+                      <span className="text-[9px] text-white/30">Com. posnet %</span>
+                      <input type="number" value={editForm.comision} onChange={e => setEditForm(f => ({ ...f, comision: e.target.value }))}
+                        className="w-full bg-white/10 text-white text-[11px] rounded px-2 py-1 border-0" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-3 text-[10px]">
+                    {c.descuento > 0 && <span className="text-emerald-400">Dto: {c.descuento}%</span>}
+                    {c.comision > 0 && <span className="text-purple-400">Com: {c.comision}%</span>}
+                    {c.descuento === 0 && c.comision === 0 && <span className="text-white/30">Sin dto ni comisión</span>}
                   </div>
                 )}
               </div>
             ))}
-            <div className="flex gap-1.5 pt-1 border-t border-white/5">
-              <input placeholder="Nuevo posnet..." value={newPosnet} onChange={e => setNewPosnet(e.target.value)}
-                className="flex-1 bg-white/10 text-white text-[10px] rounded px-2 py-1.5 border-0 placeholder:text-white/20" />
-              <button onClick={addPosnet} className="px-2 py-1.5 bg-purple-500 text-white text-[9px] rounded hover:bg-purple-600 font-medium">Agregar</button>
-            </div>
+            <p className="text-[9px] text-white/20 pt-1">Dto = descuento al cliente · Com = comisión del posnet que se descuenta de la billetera</p>
           </div>
         )}
       </div>

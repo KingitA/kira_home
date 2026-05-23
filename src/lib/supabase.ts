@@ -103,6 +103,11 @@ export interface PosnetComision {
   descripcion: string | null; activo: boolean; created_at: string
 }
 
+export interface CondicionPago {
+  id: number; nombre: string; tipo: 'efectivo' | 'transferencia' | 'tarjeta'
+  descuento: number; comision: number; activo: boolean; created_at: string
+}
+
 export interface MovimientoCaja {
   id: number; desde: string; hacia: string; monto: number
   nota: string | null; fecha: string; created_at: string

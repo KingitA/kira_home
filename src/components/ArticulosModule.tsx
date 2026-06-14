@@ -92,6 +92,14 @@ export default function ArticulosModule() {
   async function deleteArticulo(id: number) { if (!confirm('¿Eliminar artículo?')) return; await supabase.from('articulos').update({ activo: false }).eq('id', id) }
   async function addArticulo() { if (!newArticulo.descripcion) return; await supabase.from('articulos').insert([newArticulo]); setShowAdd(false); setNewArticulo({ proveedor: '', codigo: '', descripcion: '', cantidad: 0, costo_unitario: 0, precio_comparativo: 0, precio_venta: 0, nota: '' }) }
 
+  function exportArticulos() {
+    const data = articulos.map(a => ({ Proveedor: a.proveedor, Código: a.codigo, Descripción: a.descripcion, Stock: a.cantidad, 'Costo unitario': a.costo_unitario, 'Precio comparativo': a.precio_comparativo ?? '', 'Precio venta': a.precio_venta, Nota: a.nota }))
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Artículos')
+    XLSX.writeFile(wb, `articulos_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
   // ========== IMPORT LOGIC ==========
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -272,6 +280,10 @@ export default function ArticulosModule() {
             <button onClick={() => setShowFilters(!showFilters)}
               className={cn("px-3 py-2.5 rounded-lg border text-sm flex items-center gap-2 transition-colors", showFilters || proveedorFilter ? "bg-kira-50 border-kira-200 text-kira-700" : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50")}>
               <Filter size={15} /><span className="hidden sm:inline">Filtros</span>
+            </button>
+            <button onClick={exportArticulos}
+              className="px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm text-gray-600 hover:bg-gray-50 transition-colors flex items-center gap-2">
+              <Download size={15} /><span className="hidden sm:inline">Exportar</span>
             </button>
             <label className="px-4 py-2.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors flex items-center gap-2 cursor-pointer">
               <Upload size={15} /><span className="hidden sm:inline">Importar</span>

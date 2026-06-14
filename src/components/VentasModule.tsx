@@ -73,7 +73,9 @@ export default function VentasModule({ onVentaCompleta }: Props) {
         const refMonto = cond ? subtotal * (1 - cond.descuento / 100) : subtotal
         return { ...x, refPrecio: !x.refPrecio, monto: !x.refPrecio ? refMonto.toString() : x.monto }
       }
-      return { ...x, refPrecio: false }
+      // Uncheck others AND clear their monto if they had refPrecio
+      if (x.refPrecio) return { ...x, refPrecio: false, monto: '' }
+      return x
     }))
   }
 

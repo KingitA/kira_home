@@ -24,6 +24,14 @@ const CATS=[
   {id:'baño',nombre:'Baño',kw:['baño','jabonera','cesto de basura','portacepillo'],bg:'bg-cyan-50 border-cyan-200',t:'text-cyan-800',a:'text-cyan-600',I:IllBano},
 ]
 
+interface PagoLine {
+  condId: number | null
+  monto: string       // portion of list price this line covers
+  esDebito: boolean
+  pagaCon: string      // for efectivo: how much client gives
+  vueltoReal: string   // for efectivo: actual change given
+}
+
 export default function VentasModule({ onVentaCompleta }: Props) {
   const [arts, setArts] = useState<Articulo[]>([])
   const [search, setSearch] = useState('')
@@ -34,11 +42,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const [err, setErr] = useState('')
   const [catAct, setCatAct] = useState<string | null>(null)
   const [condiciones, setCondiciones] = useState<CondicionPago[]>([])
-  const [condActiva, setCondActiva] = useState<number | null>(null)
-  const [esDebito, setEsDebito] = useState(false)
-  // Paga con / vuelto
-  const [pagaCon, setPagaCon] = useState('')
-  const [vueltoReal, setVueltoReal] = useState('')
+  const [pagos, setPagos] = useState<PagoLine[]>([{ condId: null, monto: '', esDebito: false, pagaCon: '', vueltoReal: '' }])
   const ref = useRef<HTMLInputElement>(null)
 
   useEffect(() => { load() }, [])
@@ -58,54 +62,82 @@ export default function VentasModule({ onVentaCompleta }: Props) {
 
   function addToCart(a: Articulo) { setCart(p => { const e = p.find(i => i.articulo.id === a.id); if (e) { if (e.cantidad >= a.cantidad) { setErr(`Stock máx: ${a.cantidad}`); setTimeout(() => setErr(''), 2500); return p } return p.map(i => i.articulo.id === a.id ? { ...i, cantidad: i.cantidad + 1 } : i) } return [...p, { articulo: a, cantidad: 1 }] }); setSearch(''); if (!catAct) setResults([]) }
   function updQty(id: number, d: number) { setCart(p => p.map(i => { if (i.articulo.id !== id) return i; const q = i.cantidad + d; if (q <= 0 || q > i.articulo.cantidad) return i; return { ...i, cantidad: q } })) }
-  function clearAll() { setCart([]); setErr(''); setCondActiva(null); setEsDebito(false); setPagaCon(''); setVueltoReal('') }
+  function clearAll() { setCart([]); setErr(''); setPagos([{ condId: null, monto: '', esDebito: false, pagaCon: '', vueltoReal: '' }]) }
 
   const subtotal = cart.reduce((s, i) => s + (i.articulo.precio_venta * i.cantidad), 0)
   const totalItems = cart.reduce((s, i) => s + i.cantidad, 0)
 
-  const cond = condiciones.find(c => c.id === condActiva)
-  const descuentoMonto = cond ? subtotal * cond.descuento / 100 : 0
-  const totalACobrar = subtotal - descuentoMonto
-  // Comision: for transferencia, if esDebito, add the posnet comision on top
-  const comisionPct = cond ? cond.comision + (cond.tipo === 'transferencia' && esDebito ? cond.comision : 0) : 0
-  // Actually: comision from condicion is the posnet %. For transferencia+debito we use the comision field
-  const comisionReal = cond ? (cond.tipo === 'transferencia' && esDebito ? totalACobrar * cond.comision / 100 : (cond.tipo === 'tarjeta' ? totalACobrar * cond.comision / 100 : 0)) : 0
-  const netoEnCaja = totalACobrar - comisionReal
+  // Per-line calculations
+  function lineCalc(p: PagoLine) {
+    const cond = condiciones.find(c => c.id === p.condId)
+    if (!cond) return { cond: null, montoLista: 0, dto: 0, cobrar: 0, comision: 0, neto: 0, billTipo: 'efectivo', pagaConNum: 0, vueltoSug: 0, vueltoRealNum: 0, entra: 0 }
+    const montoLista = parseFloat(p.monto) || 0
+    const dto = montoLista * cond.descuento / 100
+    const cobrar = montoLista - dto
+    const comPct = cond.tipo === 'transferencia' && p.esDebito ? cond.comision : cond.comision
+    const comision = (cond.tipo === 'tarjeta' || (cond.tipo === 'transferencia' && p.esDebito)) ? cobrar * comPct / 100 : 0
+    const neto = cobrar - comision
+    const billTipo = cond.tipo === 'efectivo' ? 'efectivo' : cond.tipo === 'transferencia' ? (p.esDebito ? 'tarjeta_debito' : 'transferencia') : 'tarjeta_credito'
+    // Efectivo: paga con logic
+    const pagaConNum = parseFloat(p.pagaCon) || 0
+    const vueltoSug = pagaConNum > cobrar ? pagaConNum - cobrar : 0
+    const vueltoRealNum = p.vueltoReal !== '' ? (parseFloat(p.vueltoReal) || 0) : 0
+    const entra = cond.tipo === 'efectivo' && pagaConNum > 0 ? pagaConNum - vueltoRealNum : neto
+    return { cond, montoLista, dto, cobrar, comision, neto, billTipo, pagaConNum, vueltoSug, vueltoRealNum, entra }
+  }
 
-  // Paga con logic
-  const pagaConNum = parseFloat(pagaCon) || 0
-  const vueltoSugerido = pagaConNum > 0 && cond?.tipo === 'efectivo' ? pagaConNum - totalACobrar : 0
-  const vueltoRealNum = vueltoReal !== '' ? (parseFloat(vueltoReal) || 0) : 0
-  const entraEnCajaEfectivo = cond?.tipo === 'efectivo' && pagaConNum > 0 ? pagaConNum - vueltoRealNum : netoEnCaja
+  const linesCalc = pagos.map(lineCalc)
+  const totalCobrar = linesCalc.reduce((s, l) => s + l.cobrar, 0)
+  const totalComision = linesCalc.reduce((s, l) => s + l.comision, 0)
+  const totalEntraCaja = linesCalc.reduce((s, l) => s + l.entra, 0)
+  const totalAsignado = linesCalc.reduce((s, l) => s + l.montoLista, 0)
+  const faltaAsignar = subtotal - totalAsignado
+  const allValid = pagos.every(p => p.condId !== null) && Math.abs(faltaAsignar) < 1
 
-  // Final amount that enters billetera
-  const montoFinalCaja = cond?.tipo === 'efectivo' && pagaConNum > 0 ? entraEnCajaEfectivo : netoEnCaja
+  function addPago() { setPagos(p => [...p, { condId: null, monto: '', esDebito: false, pagaCon: '', vueltoReal: '' }]) }
+  function rmPago(i: number) { setPagos(p => p.length <= 1 ? p : p.filter((_, j) => j !== i)) }
+  function updP(i: number, f: Partial<PagoLine>) { setPagos(p => p.map((x, j) => j === i ? { ...x, ...f } : x)) }
+  function setCondForLine(i: number, condId: number) {
+    const current = pagos[i]
+    // If single line, auto-fill monto with subtotal
+    if (pagos.length === 1) updP(i, { condId, monto: subtotal.toString(), esDebito: false, pagaCon: '', vueltoReal: '' })
+    else updP(i, { condId, esDebito: false, pagaCon: '', vueltoReal: '' })
+  }
+  function autoFillResto(i: number) {
+    const others = pagos.reduce((s, p, j) => j === i ? s : s + (parseFloat(p.monto) || 0), 0)
+    updP(i, { monto: Math.max(0, subtotal - others).toString() })
+  }
 
-  function getBilleteraTipo(): string {
-    if (!cond) return 'efectivo'
-    if (cond.tipo === 'efectivo') return 'efectivo'
-    if (cond.tipo === 'transferencia') return esDebito ? 'tarjeta_debito' : 'transferencia'
-    return 'tarjeta_credito'
+  const condIcon = (tipo: string, sz = 16) => {
+    if (tipo === 'efectivo') return <Banknote size={sz} className="text-emerald-500" />
+    if (tipo === 'transferencia') return <CreditCard size={sz} className="text-blue-500" />
+    return <Wallet size={sz} className="text-purple-500" />
   }
 
   async function procesarVenta() {
-    if (cart.length === 0 || !cond) { setErr('Seleccioná una condición de pago'); return }
+    if (cart.length === 0 || !allValid) { setErr('Completá las formas de pago'); return }
     setProc(true); setErr('')
     try {
+      // Build nota
       const notas: string[] = []
-      notas.push(`Pago: ${cond.nombre}${esDebito ? ' (Débito)' : ''}`)
-      if (cond.descuento > 0) notas.push(`Dto ${cond.descuento}%: -${formatCurrency(descuentoMonto)}`)
-      if (comisionReal > 0) notas.push(`Com. posnet: -${formatCurrency(comisionReal)}`)
-      if (cond.tipo === 'efectivo' && pagaConNum > 0) {
-        notas.push(`Paga con: ${formatCurrency(pagaConNum)}`)
-        notas.push(`Vuelto: ${formatCurrency(vueltoRealNum)}`)
-        if (Math.abs(entraEnCajaEfectivo - totalACobrar) > 0.5) notas.push(`Ajuste: ${formatCurrency(entraEnCajaEfectivo - totalACobrar)}`)
-      }
-      notas.push(`Neto caja: ${formatCurrency(montoFinalCaja)}`)
+      linesCalc.forEach((l, i) => {
+        if (!l.cond) return
+        let s = `${l.cond.nombre}${pagos[i].esDebito ? ' (Débito)' : ''}: Lista ${formatCurrency(l.montoLista)}`
+        if (l.dto > 0) s += ` → Dto ${l.cond.descuento}%: -${formatCurrency(l.dto)}`
+        s += ` → Cobra ${formatCurrency(l.cobrar)}`
+        if (l.comision > 0) s += ` → Com: -${formatCurrency(l.comision)}`
+        if (l.cond.tipo === 'efectivo' && l.pagaConNum > 0) s += ` → PagaCon: ${formatCurrency(l.pagaConNum)}, Vuelto: ${formatCurrency(l.vueltoRealNum)}`
+        s += ` → Caja: ${formatCurrency(l.entra)}`
+        notas.push(s)
+      })
+
+      // Main payment method = largest line
+      const mainIdx = linesCalc.reduce((best, l, i) => l.entra > (linesCalc[best]?.entra ?? 0) ? i : best, 0)
+      const mainBill = linesCalc[mainIdx]?.billTipo || 'efectivo'
 
       const { data: venta, error: ve } = await supabase.from('ventas').insert([{
-        total: totalACobrar, metodo_pago: getBilleteraTipo(), cuotas: 1,
-        nota: notas.join(' | '), comision: comisionReal, neto: montoFinalCaja
+        total: totalCobrar, metodo_pago: mainBill, cuotas: 1,
+        nota: notas.join(' | '), comision: totalComision, neto: totalEntraCaja
       }]).select().single()
       if (ve) throw ve
 
@@ -116,9 +148,12 @@ export default function VentasModule({ onVentaCompleta }: Props) {
 
       for (const i of cart) await supabase.from('articulos').update({ cantidad: i.articulo.cantidad - i.cantidad }).eq('id', i.articulo.id)
 
-      const billTipo = getBilleteraTipo()
-      const { data: b } = await supabase.from('billetera').select('*').eq('tipo', billTipo).single()
-      if (b) await supabase.from('billetera').update({ saldo: b.saldo + montoFinalCaja }).eq('id', b.id)
+      // Update billetera for each payment line
+      for (const l of linesCalc) {
+        if (l.entra <= 0) continue
+        const { data: b } = await supabase.from('billetera').select('*').eq('tipo', l.billTipo).single()
+        if (b) await supabase.from('billetera').update({ saldo: b.saldo + l.entra }).eq('id', b.id)
+      }
 
       setOk(true); clearAll(); load(); onVentaCompleta()
       setTimeout(() => setOk(false), 3000)
@@ -126,18 +161,6 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   }
 
   const cntCat = (c: typeof CATS[0]) => arts.filter(a => { const d = a.descripcion.toLowerCase(), n = (a.nota || '').toLowerCase(); return c.kw.some(k => d.includes(k) || n.includes(k)) }).length
-
-  const condIcon = (tipo: string) => {
-    if (tipo === 'efectivo') return <Banknote size={18} className="text-emerald-500" />
-    if (tipo === 'transferencia') return <CreditCard size={18} className="text-blue-500" />
-    return <Wallet size={18} className="text-purple-500" />
-  }
-  const condColor = (tipo: string, active: boolean) => {
-    if (!active) return 'bg-white border-gray-200 hover:bg-gray-50'
-    if (tipo === 'efectivo') return 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-200'
-    if (tipo === 'transferencia') return 'bg-blue-50 border-blue-300 ring-2 ring-blue-200'
-    return 'bg-purple-50 border-purple-300 ring-2 ring-purple-200'
-  }
 
   return (
     <div className="h-full flex flex-col lg:flex-row bg-botanical">
@@ -158,7 +181,7 @@ export default function VentasModule({ onVentaCompleta }: Props) {
       </div>
 
       {/* Cart */}
-      <div className="w-full lg:w-[420px] bg-white border-t lg:border-t-0 lg:border-l border-gray-100 flex flex-col relative z-10">
+      <div className="w-full lg:w-[440px] bg-white border-t lg:border-t-0 lg:border-l border-gray-100 flex flex-col relative z-10">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-2"><ShoppingCart size={16} className="text-gray-400" /><h3 className="text-sm font-semibold text-gray-700">Venta actual</h3>{totalItems > 0 && <span className="bg-kira-100 text-kira-700 text-xs font-semibold px-1.5 py-0.5 rounded-full">{totalItems}</span>}</div>
           {cart.length > 0 && <button onClick={clearAll} className="text-xs text-red-500 hover:text-red-600 hover:underline">Vaciar</button>}
@@ -167,120 +190,150 @@ export default function VentasModule({ onVentaCompleta }: Props) {
           {cart.length === 0 ? <div className="flex items-center justify-center h-full text-gray-300 text-sm">Carrito vacío</div> :
             <div className="space-y-2">{cart.map((item, idx) => (<div key={item.articulo.id} className="flex items-center gap-3 p-3 bg-gray-50/80 rounded-lg animate-slide-in" style={{ animationDelay: `${idx * 50}ms` }}><div className="flex-1 min-w-0"><p className="text-sm font-medium text-gray-800 truncate">{item.articulo.descripcion}</p><p className="text-xs text-gray-400">{formatCurrency(item.articulo.precio_venta)} c/u</p></div><div className="flex items-center gap-1.5"><button onClick={() => updQty(item.articulo.id, -1)} disabled={item.cantidad <= 1} className="w-7 h-7 rounded-md border border-gray-200 flex items-center justify-center hover:bg-gray-100 disabled:opacity-30"><Minus size={12} /></button><span className="w-8 text-center text-sm font-semibold text-gray-700">{item.cantidad}</span><button onClick={() => updQty(item.articulo.id, 1)} disabled={item.cantidad >= item.articulo.cantidad} className="w-7 h-7 rounded-md border border-gray-200 flex items-center justify-center hover:bg-gray-100 disabled:opacity-30"><Plus size={12} /></button></div><p className="text-sm font-semibold text-gray-800 w-20 text-right">{formatCurrency(item.articulo.precio_venta * item.cantidad)}</p><button onClick={() => setCart(p => p.filter(i => i.articulo.id !== item.articulo.id))} className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button></div>))}</div>}
         </div>
+
         {cart.length > 0 && (
           <div className="border-t border-gray-100 px-4 py-4 space-y-3 max-h-[65vh] overflow-auto">
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-500">Precio de lista ({totalItems} art.)</span>
-              <span className="text-sm text-gray-700">{formatCurrency(subtotal)}</span>
+              <span className="text-sm font-semibold text-gray-700">{formatCurrency(subtotal)}</span>
             </div>
 
-            {/* Condiciones de pago */}
+            {/* Payment lines */}
             <div>
-              <p className="text-xs text-gray-400 uppercase tracking-wider mb-2 font-medium">Condición de pago</p>
-              <div className="grid grid-cols-3 gap-2">
-                {condiciones.map(c => (
-                  <button key={c.id} onClick={() => { setCondActiva(condActiva === c.id ? null : c.id); setEsDebito(false); setPagaCon(''); setVueltoReal('') }}
-                    className={cn("flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl border transition-all", condColor(c.tipo, condActiva === c.id))}>
-                    {condIcon(c.tipo)}
-                    <span className="text-xs font-medium text-gray-700">{c.nombre}</span>
-                    {c.descuento > 0 && <span className="text-[10px] text-emerald-600 font-semibold">-{c.descuento}%</span>}
-                    {c.comision > 0 && <span className="text-[10px] text-purple-500">Com. {c.comision}%</span>}
-                  </button>
-                ))}
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-gray-400 uppercase tracking-wider font-medium">Formas de pago</p>
+                <button onClick={addPago} className="text-[10px] text-kira-600 hover:underline flex items-center gap-0.5"><Plus size={10} />Agregar</button>
               </div>
+
+              <div className="space-y-3">
+                {pagos.map((p, idx) => {
+                  const l = linesCalc[idx]
+                  const cond = l.cond
+                  return (
+                    <div key={idx} className={cn("rounded-xl border p-3 space-y-2 transition-all",
+                      cond ? (cond.tipo === 'efectivo' ? 'border-emerald-200 bg-emerald-50/30' : cond.tipo === 'transferencia' ? 'border-blue-200 bg-blue-50/30' : 'border-purple-200 bg-purple-50/30') : 'border-gray-200 bg-gray-50/30')}>
+
+                      {/* Condition selector */}
+                      <div className="flex items-center gap-1.5">
+                        {condiciones.map(c => (
+                          <button key={c.id} onClick={() => setCondForLine(idx, c.id)}
+                            className={cn("flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg border text-[11px] font-medium transition-all",
+                              p.condId === c.id ? (c.tipo === 'efectivo' ? 'bg-emerald-100 border-emerald-300 text-emerald-700' : c.tipo === 'transferencia' ? 'bg-blue-100 border-blue-300 text-blue-700' : 'bg-purple-100 border-purple-300 text-purple-700') : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50')}>
+                            {condIcon(c.tipo, 12)}
+                            {c.nombre}
+                          </button>
+                        ))}
+                        {pagos.length > 1 && <button onClick={() => rmPago(idx)} className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400"><X size={14} /></button>}
+                      </div>
+
+                      {cond && (
+                        <>
+                          {/* Amount */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500 w-16">Monto</span>
+                            <div className="relative flex-1">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
+                              <input type="number" value={p.monto} onChange={e => updP(idx, { monto: e.target.value })}
+                                placeholder={pagos.length === 1 ? subtotal.toString() : '0'}
+                                className="w-full pl-5 pr-3 py-1.5 rounded-lg border border-gray-200 text-sm text-right focus:outline-none focus:ring-2 focus:ring-kira-400/30" />
+                            </div>
+                            {pagos.length > 1 && <button onClick={() => autoFillResto(idx)} className="text-[9px] text-kira-600 hover:underline whitespace-nowrap">Resto</button>}
+                          </div>
+
+                          {/* Line breakdown */}
+                          {l.montoLista > 0 && (
+                            <div className="space-y-1 text-[11px]">
+                              {l.dto > 0 && <div className="flex justify-between"><span className="text-emerald-600">Dto {cond.descuento}%</span><span className="font-semibold text-emerald-600">-{formatCurrency(l.dto)}</span></div>}
+                              <div className="flex justify-between"><span className="text-gray-600">Cobra</span><span className="font-semibold text-gray-800">{formatCurrency(l.cobrar)}</span></div>
+
+                              {/* Debito toggle */}
+                              {cond.tipo === 'transferencia' && (
+                                <label className="flex items-center gap-1.5 cursor-pointer py-0.5">
+                                  <input type="checkbox" checked={p.esDebito} onChange={e => updP(idx, { esDebito: e.target.checked })}
+                                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-500" />
+                                  <Wallet size={11} className="text-purple-500" />
+                                  <span className="text-gray-500">Paga con débito</span>
+                                  {p.esDebito && cond.comision > 0 && <span className="text-purple-500 ml-auto">Com. {cond.comision}%</span>}
+                                </label>
+                              )}
+
+                              {l.comision > 0 && <div className="flex justify-between"><span className="text-purple-600">Com. posnet {cond.comision}%</span><span className="font-semibold text-purple-600">-{formatCurrency(l.comision)}</span></div>}
+
+                              {/* Paga con (efectivo) */}
+                              {cond.tipo === 'efectivo' && (
+                                <div className="space-y-1 pt-1 border-t border-gray-100">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-500 w-16">Paga con</span>
+                                    <div className="relative flex-1">
+                                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">$</span>
+                                      <input type="number" placeholder={l.cobrar.toString()} value={p.pagaCon}
+                                        onChange={e => updP(idx, { pagaCon: e.target.value, vueltoReal: '' })}
+                                        className="w-full pl-5 pr-2 py-1 rounded border border-gray-200 text-[11px] text-right" />
+                                    </div>
+                                  </div>
+                                  {l.pagaConNum > l.cobrar && (
+                                    <>
+                                      <div className="flex justify-between"><span className="text-amber-600">Vuelto sugerido</span><span className="text-amber-600 font-semibold">{formatCurrency(l.vueltoSug)}</span></div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-gray-500 w-16">Vuelto real</span>
+                                        <div className="relative flex-1">
+                                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">$</span>
+                                          <input type="number" placeholder={l.vueltoSug.toString()} value={p.vueltoReal}
+                                            onChange={e => updP(idx, { vueltoReal: e.target.value })}
+                                            className="w-full pl-5 pr-2 py-1 rounded border border-gray-200 text-[11px] text-right" />
+                                        </div>
+                                      </div>
+                                      {p.vueltoReal !== '' && Math.abs(l.vueltoRealNum - l.vueltoSug) > 0.5 && (
+                                        <div className={cn("flex justify-between", l.vueltoRealNum < l.vueltoSug ? "text-emerald-600" : "text-red-500")}>
+                                          <span>{l.vueltoRealNum < l.vueltoSug ? 'Te quedás con' : 'Das de más'}</span>
+                                          <span className="font-semibold">{formatCurrency(Math.abs(l.vueltoSug - l.vueltoRealNum))}</span>
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              )}
+
+                              <div className="flex justify-between pt-1 border-t border-gray-100"><span className="text-gray-500 font-medium">Entra en caja</span><span className="font-bold text-gray-800">{formatCurrency(l.entra)}</span></div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Assignment check */}
+              {Math.abs(faltaAsignar) >= 1 && totalAsignado > 0 && (
+                <div className={cn("flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg text-xs",
+                  faltaAsignar > 0 ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-600")}>
+                  <span>{faltaAsignar > 0 ? 'Falta asignar' : 'Excede el total'}</span>
+                  <span className="font-semibold">{formatCurrency(Math.abs(faltaAsignar))}</span>
+                </div>
+              )}
             </div>
 
-            {/* Breakdown */}
-            {cond && (
-              <div className="space-y-2 animate-fade-in">
-                {cond.descuento > 0 && (
-                  <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-emerald-50 text-xs">
-                    <span className="text-emerald-700">Descuento {cond.nombre} {cond.descuento}%</span>
-                    <span className="font-semibold text-emerald-600">-{formatCurrency(descuentoMonto)}</span>
-                  </div>
-                )}
-
+            {/* Totals */}
+            {totalCobrar > 0 && (
+              <div className="space-y-1 pt-2 border-t border-gray-100">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-gray-700">Total a cobrar</span>
-                  <span style={{ fontFamily: 'var(--font-display)' }} className="text-2xl font-bold text-gray-900">{formatCurrency(totalACobrar)}</span>
+                  <span style={{ fontFamily: 'var(--font-display)' }} className="text-xl font-bold text-gray-900">{formatCurrency(totalCobrar)}</span>
                 </div>
-
-                {/* Débito toggle for transferencia */}
-                {cond.tipo === 'transferencia' && (
-                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-blue-50/50 cursor-pointer">
-                    <input type="checkbox" checked={esDebito} onChange={e => setEsDebito(e.target.checked)}
-                      className="w-4 h-4 rounded border-gray-300 text-blue-500 focus:ring-blue-400" />
-                    <Wallet size={13} className="text-purple-500" />
-                    <span className="text-xs text-gray-600">Paga con tarjeta de débito</span>
-                    {esDebito && cond.comision > 0 && <span className="text-[10px] text-purple-500 ml-auto">Com. {cond.comision}%</span>}
-                  </label>
-                )}
-
-                {/* Comision posnet */}
-                {comisionReal > 0 && (
-                  <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-purple-50 text-xs">
-                    <span className="text-purple-700">Comisión posnet {cond.comision}%</span>
-                    <span className="font-semibold text-purple-600">-{formatCurrency(comisionReal)}</span>
-                  </div>
-                )}
-
-                {/* Paga con (solo efectivo) */}
-                {cond.tipo === 'efectivo' && (
-                  <div className="space-y-1.5 px-2 py-2 rounded-lg bg-gray-50">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-500 w-20">Paga con</span>
-                      <div className="relative flex-1">
-                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
-                        <input type="number" placeholder={totalACobrar.toString()} value={pagaCon}
-                          onChange={e => { setPagaCon(e.target.value); setVueltoReal('') }}
-                          className="w-full pl-5 pr-3 py-1.5 rounded-lg border border-gray-200 text-sm text-right focus:outline-none focus:ring-2 focus:ring-emerald-400/30" />
-                      </div>
-                    </div>
-                    {pagaConNum > 0 && vueltoSugerido > 0 && (
-                      <>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-500">Vuelto sugerido</span>
-                          <span className="font-semibold text-amber-600">{formatCurrency(vueltoSugerido)}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-500 w-20">Vuelto real</span>
-                          <div className="relative flex-1">
-                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
-                            <input type="number" placeholder={vueltoSugerido.toString()} value={vueltoReal}
-                              onChange={e => setVueltoReal(e.target.value)}
-                              className="w-full pl-5 pr-3 py-1.5 rounded-lg border border-gray-200 text-sm text-right focus:outline-none focus:ring-2 focus:ring-amber-400/30" />
-                          </div>
-                        </div>
-                        {vueltoReal !== '' && Math.abs(vueltoRealNum - vueltoSugerido) > 0.5 && (
-                          <div className={cn("flex items-center justify-between text-[10px] px-1",
-                            vueltoRealNum < vueltoSugerido ? "text-emerald-600" : "text-red-500")}>
-                            <span>{vueltoRealNum < vueltoSugerido ? 'Te quedás con' : 'Das de más'}</span>
-                            <span className="font-semibold">{formatCurrency(Math.abs(vueltoSugerido - vueltoRealNum))}</span>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    {pagaConNum > 0 && pagaConNum < totalACobrar && (
-                      <div className="text-[10px] text-red-500 px-1">Falta cobrar {formatCurrency(totalACobrar - pagaConNum)}</div>
-                    )}
-                  </div>
-                )}
-
-                {/* Neto en caja */}
+                {totalComision > 0 && <div className="flex justify-between text-xs"><span className="text-purple-600">Comisiones totales</span><span className="font-semibold text-purple-600">-{formatCurrency(totalComision)}</span></div>}
                 <div className="flex items-center justify-between px-2 py-1.5 bg-gray-50 rounded-lg text-xs">
-                  <span className="text-gray-500 font-medium">Entra en caja</span>
-                  <span className="font-bold text-gray-800 text-sm">{formatCurrency(montoFinalCaja)}</span>
+                  <span className="text-gray-500 font-medium">Total entra en caja</span>
+                  <span className="font-bold text-gray-800 text-sm">{formatCurrency(totalEntraCaja)}</span>
                 </div>
               </div>
             )}
 
-            {!cond && <div className="text-center py-2 text-xs text-amber-500">Seleccioná una condición de pago</div>}
-
             {err && <div className="flex items-center gap-2 p-2 bg-red-50 rounded-lg text-red-600 text-xs animate-fade-in"><AlertCircle size={14} />{err}</div>}
-            <button onClick={procesarVenta} disabled={proc || !cond}
+            <button onClick={procesarVenta} disabled={proc || !allValid}
               className={cn("w-full py-3 rounded-xl text-white font-semibold text-sm transition-all flex items-center justify-center gap-2",
-                proc || !cond ? "bg-gray-400 cursor-not-allowed" : "bg-kira-500 hover:bg-kira-600 active:scale-[0.98] shadow-md shadow-kira-500/20")}>
-              {proc ? 'Procesando...' : <><CheckCircle2 size={16} />Cerrar Venta{cond ? ` — ${formatCurrency(totalACobrar)}` : ''}</>}
+                proc || !allValid ? "bg-gray-400 cursor-not-allowed" : "bg-kira-500 hover:bg-kira-600 active:scale-[0.98] shadow-md shadow-kira-500/20")}>
+              {proc ? 'Procesando...' : <><CheckCircle2 size={16} />Cerrar Venta{totalCobrar > 0 ? ` — ${formatCurrency(totalCobrar)}` : ''}</>}
             </button>
           </div>
         )}

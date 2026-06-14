@@ -24,7 +24,7 @@ const CATS=[
   {id:'baño',nombre:'Baño',kw:['baño','jabonera','cesto de basura','portacepillo'],bg:'bg-cyan-50 border-cyan-200',t:'text-cyan-800',a:'text-cyan-600',I:IllBano},
 ]
 
-interface PagoLine { condId: number; monto: string; esDebito: boolean; pagaCon: string; vueltoReal: string }
+interface PagoLine { condId: number; monto: string; esDebito: boolean; pagaCon: string; vueltoReal: string; refPrecio: boolean }
 
 export default function VentasModule({ onVentaCompleta }: Props) {
   const [arts, setArts] = useState<Articulo[]>([])
@@ -61,10 +61,21 @@ export default function VentasModule({ onVentaCompleta }: Props) {
   const subtotal = cart.reduce((s, i) => s + (i.articulo.precio_venta * i.cantidad), 0)
   const totalItems = cart.reduce((s, i) => s + i.cantidad, 0)
 
-  function addPago(condId: number) { setPagos(p => [...p, { condId, monto: '', esDebito: false, pagaCon: '', vueltoReal: '' }]) }
+  function addPago(condId: number) { setPagos(p => [...p, { condId, monto: '', esDebito: false, pagaCon: '', vueltoReal: '', refPrecio: false }]) }
   function removePago(idx: number) { setPagos(p => p.filter((_, i) => i !== idx)) }
   function updPago(idx: number, field: keyof PagoLine, val: any) { setPagos(p => p.map((x, i) => i === idx ? { ...x, [field]: val } : x)) }
   function fillResto(idx: number) { const ot = pagos.reduce((s, p, i) => i === idx ? s : s + (parseFloat(p.monto) || 0), 0); updPago(idx, 'monto', Math.max(0, subtotal - ot).toString()) }
+
+  function toggleRef(idx: number) {
+    setPagos(p => p.map((x, i) => {
+      if (i === idx) {
+        const cond = condiciones.find(c => c.id === x.condId)
+        const refMonto = cond ? subtotal * (1 - cond.descuento / 100) : subtotal
+        return { ...x, refPrecio: !x.refPrecio, monto: !x.refPrecio ? refMonto.toString() : x.monto }
+      }
+      return { ...x, refPrecio: false }
+    }))
+  }
 
   function getLineInfo(p: PagoLine) {
     const cond = condiciones.find(c => c.id === p.condId)
@@ -189,6 +200,13 @@ export default function VentasModule({ onVentaCompleta }: Props) {
                         <div className="flex items-center gap-1.5">{condIcon(c.tipo, 14)}<span className="text-xs font-semibold text-gray-700">{c.nombre}</span>{c.descuento > 0 && <span className="text-[10px] text-emerald-600">(-{c.descuento}%)</span>}</div>
                         <button onClick={() => removePago(idx)} className="p-0.5 rounded hover:bg-white/50"><X size={12} className="text-gray-400" /></button>
                       </div>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" checked={p.refPrecio} onChange={() => toggleRef(idx)}
+                          className={cn("w-3.5 h-3.5 rounded border-gray-300",
+                            c.tipo === 'efectivo' ? "text-emerald-500" : c.tipo === 'transferencia' ? "text-blue-500" : "text-purple-500")} />
+                        <span className="text-[10px] text-gray-500">Precio de referencia</span>
+                        <span className="text-[10px] font-semibold text-gray-600 ml-auto">{formatCurrency(subtotal * (1 - c.descuento / 100))}</span>
+                      </label>
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-gray-500 w-14">Cobra</span>
                         <div className="relative flex-1"><span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
